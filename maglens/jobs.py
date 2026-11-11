@@ -6,9 +6,12 @@ import traceback
 from concurrent.futures import ThreadPoolExecutor
 
 from .config import Config
-from .extract import Engine
+from .extract import Engine, MockEngine
 from .prompts import PROMPT_VERSION
 from .store import Store
+
+
+MOCK_MODEL = "mock"
 
 
 class Jobs:
@@ -28,16 +31,28 @@ class Jobs:
             if key in self._inflight:
                 return "running"
             row = self.store.page(mag_id, page)
-            if row and row["status"] == "done" and not force:
+            # Placeholder results from mock mode must not count as done for a real engine.
+            stale_mock = (row and row.get("model") == MOCK_MODEL
+                          and not isinstance(self.engine, MockEngine))
+            if row and row["status"] == "done" and not force and not stale_mock:
                 return "done"
             if row and row["status"] == "error" and not force:
                 return "error"
+            if getattr(self.engine, "manual", False):
+                # Results come from elsewhere (hand-written or the background runner): never
+                # overwrite a status someone else set.
+                if not row or not row["status"]:
+                    self.store.set_status(mag_id, page, "waiting")
+                    return "waiting"
+                return row["status"]
             self._inflight.add(key)
         self.store.set_status(mag_id, page, "queued")
         self.pool.submit(self._run, mag, page)
         return "queued"
 
     def prefetch(self, mag_id: str, page: int):
+        if getattr(self.engine, "manual", False):
+            return
         for p in range(page + 1, page + 1 + self.cfg.prefetch):
             self.ensure(mag_id, p)
 
@@ -51,7 +66,8 @@ class Jobs:
             data, usage = self.engine.process_page(mag, page, glossary, prev_summary)
             data["meta"]["usage"] = usage.details
             self.store.add_terms(mag["series"], data.get("new_terms", []))
-            self.store.save_page(mag["id"], page, data, usage.cost, self.cfg.model, PROMPT_VERSION)
+            model = MOCK_MODEL if isinstance(self.engine, MockEngine) else self.cfg.model
+            self.store.save_page(mag["id"], page, data, usage.cost, model, PROMPT_VERSION)
         except Exception as e:
             traceback.print_exc()
             self.store.set_status(mag["id"], page, "error", f"{type(e).__name__}: {e}")

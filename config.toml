@@ -29,3 +29,7 @@ show_cny = true
 render_long_edge = 2000
 # 文字层覆盖率低于此值时触发补漏
 coverage_threshold = 0.92
+
+[reader]
+# 读者账号是否在书架上看到还没翻完的杂志（显示为“即将上线”，不能打开）；false 则直接隐藏
+show_incomplete = true

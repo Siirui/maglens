@@ -1,0 +1,19 @@
+# /etc/systemd/system/maglens.service — MagLens 只读阅读服务（不调用模型）
+[Unit]
+Description=MagLens reader
+After=network.target
+
+[Service]
+User=maglens
+WorkingDirectory=/opt/maglens/app
+# data 目录就是 publish 导出的 dist（页面图 + 精简数据库 + auth.json），服务器上没有 PDF
+ExecStart=/opt/maglens/app/.venv/bin/python run.py --manual --no-browser \
+    --dir /opt/maglens/none --data-dir /opt/maglens/data --host 127.0.0.1 --port 8765
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

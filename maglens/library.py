@@ -5,6 +5,8 @@ import hashlib
 import re
 from pathlib import Path
 
+import pymupdf
+
 from . import render
 from .store import Store
 
@@ -28,6 +30,49 @@ def guess_series(title: str) -> str:
     if m and m.group(1).strip():
         return m.group(1).strip().lower()
     return re.split(r"[\s_\-\d（(]", title.strip(), maxsplit=1)[0].lower() or title.lower()
+
+
+IMAGE_EXT = {".jpg", ".jpeg", ".png"}
+
+
+def convert_image_folders(directory: Path, out_dir: Path) -> list[Path]:
+    """Turn folders of page images (e.g. a scanned issue as IMG_0001.JPG...) into PDFs in out_dir.
+
+    The source folder is left untouched; images are embedded without re-encoding.
+    """
+    made = []
+    if not directory.exists():
+        return made
+    for d in sorted(p for p in directory.iterdir() if p.is_dir() and not p.name.startswith(".")):
+        imgs = sorted(f for f in d.iterdir() if f.suffix.lower() in IMAGE_EXT and not f.name.startswith("."))
+        if len(imgs) < 4:
+            continue
+        out = out_dir / f"{d.name}.pdf"
+        if out.exists() and out.stat().st_mtime >= max(f.stat().st_mtime for f in imgs):
+            continue
+        out_dir.mkdir(parents=True, exist_ok=True)
+        doc = pymupdf.open()
+        for f in imgs:
+            with pymupdf.open(f) as im:
+                rect = im[0].rect
+            page = doc.new_page(width=rect.width, height=rect.height)
+            page.insert_image(page.rect, filename=str(f))
+        tmp = out.with_suffix(".tmp.pdf")
+        doc.save(tmp, garbage=3, deflate=True)
+        tmp.replace(out)
+        made.append(out)
+    return made
+
+
+def scan_all(cfg, store: Store) -> list[dict]:
+    """Scan the library dir plus PDFs converted from image folders."""
+    converted = cfg.data_dir / "converted"
+    try:
+        convert_image_folders(cfg.library_dir, converted)
+    except Exception as e:
+        print(f"[library] image folder conversion failed: {e}")
+    scan(converted, store)
+    return scan(cfg.library_dir, store)
 
 
 def scan(directory: Path, store: Store) -> list[dict]:

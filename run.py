@@ -22,10 +22,11 @@ def main():
     ap.add_argument("--port", type=int, default=8765)
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--mock", action="store_true", help="不调用模型，只显示 PDF 文字层（调试界面用）")
+    ap.add_argument("--manual", action="store_true", help="人工模式：不自动识别，等待手动写入结果")
     ap.add_argument("--no-browser", action="store_true")
     a = ap.parse_args()
     cfg = load_config(library_dir=a.dir, data_dir=a.data_dir, model=a.model, effort=a.effort,
-                      mock=a.mock or None)
+                      mock=a.mock or None, manual=a.manual or None)
     app = create_app(cfg)
     url = f"http://{a.host}:{a.port}/"
     print(f"[maglens] 杂志目录: {cfg.library_dir}\n[maglens] 打开 {url}")

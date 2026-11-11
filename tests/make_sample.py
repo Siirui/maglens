@@ -13,7 +13,14 @@ from pathlib import Path
 import pymupdf
 from PIL import Image, ImageDraw, ImageFont
 
-FONT = "/usr/share/fonts/opentype/ipafont-gothic/ipag.ttf"
+import os
+
+_FONT_CANDIDATES = [
+    os.environ.get("MAGLENS_TEST_FONT", ""),
+    "/usr/share/fonts/opentype/ipafont-gothic/ipag.ttf",  # Linux (fonts-ipafont-gothic)
+    "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",  # macOS
+]
+FONT = next((c for c in _FONT_CANDIDATES if c and Path(c).exists()), _FONT_CANDIDATES[1])
 W, H = 1240, 1680  # px, ~A4 at 150dpi
 PT = 595 / W       # px -> pt
 

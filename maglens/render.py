@@ -88,7 +88,7 @@ def merge_vertical(spans: list[dict]) -> list[dict]:
             w = max(px1 - px0, x1 - x0, 1e-6)
             h = y1 - y0
             same_col = min(px1, x1) - max(px0, x0) > 0.5 * w
-            adjacent = -0.2 * h <= y0 - py1 <= 1.2 * h
+            adjacent = -0.5 * h <= y0 - py1 <= 1.2 * h
             if same_col and adjacent:
                 prev["text"] += s["text"]
                 prev["bbox"] = [min(px0, x0), py0, max(px1, x1), max(py1, y1)]

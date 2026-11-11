@@ -1,65 +1,190 @@
-"""FastAPI app: JSON API + static frontend."""
+"""FastAPI app: JSON API + static frontend.
+
+Two roles: `admin` sees everything (translation controls, glossary, export, costs, progress);
+`reader` can only browse finished translations. Without <data_dir>/auth.json there is no login
+and every request is the local admin.
+"""
 from __future__ import annotations
 
+import json
+import re
 from pathlib import Path
 
-from fastapi import Body, FastAPI, HTTPException
-from fastapi.responses import FileResponse, PlainTextResponse, Response
+from fastapi import Body, FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from . import library, render
+from .auth import COOKIE, SESSION_DAYS, Auth
 from .config import ROOT, Config
 from .extract import make_engine
 from .jobs import Jobs
 from .prompts import PROMPT_VERSION
 from .store import Store
 
+LOCAL_ADMIN = {"name": "本机", "role": "admin"}
+PUBLIC = {"/login.html", "/style.css", "/robots.txt", "/api/login", "/api/me", "/favicon.ico"}
+ADMIN_ONLY = [  # (method, path regex)
+    ("POST", r"/api/library/rescan"),
+    ("POST", r"/api/mag/[^/]+/page/\d+/retranslate"),
+    ("POST", r"/api/mag/[^/]+/page/\d+/region"),
+    ("GET", r"/api/glossary/.*"),
+    ("PUT", r"/api/glossary/.*"),
+    ("GET", r"/api/mag/[^/]+/export\.md"),
+]
+WIDTHS = (360, 1600, 2400)
+
+
+def available(m: dict) -> bool:
+    """Every page has a final result (translated, or failed for good)."""
+    return m["done"] + m.get("errors", 0) >= m["pages"]
+
+
+def published_image(cfg: Config, mag_id: str, n: int, w: int) -> Path:
+    return cfg.data_dir / "pages" / mag_id / f"{n:04d}_{w}.webp"
+
 
 def create_app(cfg: Config, engine=None) -> FastAPI:
-    store = Store(cfg.db_path)
+    store = Store(cfg.db_path, pages_dir=cfg.data_dir / "pages")
     engine = engine or make_engine(cfg)
     jobs = Jobs(cfg, store, engine)
-    library.scan(cfg.library_dir, store)
+    auth = Auth(cfg.data_dir / "auth.json")
+    library.scan_all(cfg, store)
     app = FastAPI(title="MagLens")
-    app.state.store, app.state.jobs = store, jobs
+    app.state.store, app.state.jobs, app.state.auth = store, jobs, auth
 
-    def mag_or_404(mag_id: str) -> dict:
+    # ------------------------------------------------------------------ auth
+    @app.middleware("http")
+    async def session(request: Request, call_next):
+        path = request.url.path
+        if not auth.enabled:
+            request.state.user = LOCAL_ADMIN
+        else:
+            request.state.user = auth.read_token(request.cookies.get(COOKIE))
+            if request.state.user is None and path not in PUBLIC:
+                if path.startswith("/api/"):
+                    return JSONResponse({"detail": "login required"}, status_code=401)
+                return RedirectResponse("/login.html", status_code=303)
+        user = request.state.user
+        if user and user["role"] != "admin" and any(
+                request.method == m and re.fullmatch(p, path) for m, p in ADMIN_ONLY):
+            return JSONResponse({"detail": "admin only"}, status_code=403)
+        resp = await call_next(request)
+        resp.headers["X-Robots-Tag"] = "noindex, nofollow"
+        return resp
+
+    def is_admin(request: Request) -> bool:
+        return (request.state.user or {}).get("role") == "admin"
+
+    @app.get("/api/me")
+    def me(request: Request):
+        return {"user": request.state.user, "auth": auth.enabled}
+
+    @app.post("/api/login")
+    def login(request: Request, name: str = Body(...), password: str = Body(...)):
+        user = auth.check_login(name.strip(), password)
+        if not user:
+            raise HTTPException(401, "用户名或密码不对")
+        resp = JSONResponse({"user": user})
+        resp.set_cookie(COOKIE, auth.make_token(user), max_age=SESSION_DAYS * 86400, httponly=True,
+                        samesite="lax", secure=request.url.scheme == "https")
+        return resp
+
+    @app.post("/api/logout")
+    def logout():
+        resp = JSONResponse({"ok": True})
+        resp.delete_cookie(COOKIE)
+        return resp
+
+    # ------------------------------------------------------------------ library
+    def mag_or_404(mag_id: str, request: Request | None = None) -> dict:
         m = store.magazine(mag_id)
         if not m:
             raise HTTPException(404, "magazine not found")
+        if request is not None and not is_admin(request):
+            info = next((x for x in store.magazines() if x["id"] == mag_id), None)
+            if not info or not available(info):
+                raise HTTPException(404, "magazine not available yet")
         return m
 
+    def reader_mag(m: dict) -> dict:
+        return {"id": m["id"], "title": m["title"], "series": m["series"], "pages": m["pages"],
+                "aspect": m["aspect"], "done": m["done"], "available": available(m)}
+
+    def visible_mags(request: Request) -> list[dict]:
+        mags = store.magazines()
+        if is_admin(request):
+            return [{**m, "available": available(m)} for m in mags]
+        out = [reader_mag(m) for m in mags]
+        return out if cfg.reader_show_incomplete else [m for m in out if m["available"]]
+
     @app.get("/api/library")
-    def get_library():
-        return {"dir": str(cfg.library_dir), "magazines": store.magazines(),
-                "mock": type(engine).__name__ == "MockEngine", "model": cfg.model,
+    def get_library(request: Request):
+        base = {"magazines": visible_mags(request), "user": request.state.user, "auth": auth.enabled}
+        if not is_admin(request):
+            return base
+        return {**base, "dir": str(cfg.library_dir), "mock": type(engine).__name__ == "MockEngine",
+                "manual": bool(getattr(engine, "manual", False)), "model": cfg.model,
                 "total_cost": round(store.total_cost(), 4)}
 
     @app.post("/api/library/rescan")
     def rescan():
-        return {"magazines": library.scan(cfg.library_dir, store)}
+        return {"magazines": library.scan_all(cfg, store)}
+
+    @app.get("/api/progress")
+    def progress(request: Request):
+        """Overall progress + the background runner's status. Readers only get availability."""
+        mags = visible_mags(request)
+        if not is_admin(request):
+            return {"magazines": mags}
+        runner = None
+        f = cfg.data_dir / "runner.json"
+        if f.exists():
+            try:
+                runner = json.loads(f.read_text(encoding="utf-8"))
+            except ValueError:
+                runner = None
+        return {"done": sum(m["done"] for m in mags), "pages": sum(m["pages"] for m in mags),
+                "cost": round(store.total_cost(), 4),
+                "magazines": [{"id": m["id"], "title": m["title"], "done": m["done"], "pages": m["pages"],
+                               "available": m["available"], "cost": round(m["cost"] or 0, 4)} for m in mags],
+                "runner": runner}
 
     @app.get("/api/mag/{mag_id}")
-    def get_mag(mag_id: str):
-        m = mag_or_404(mag_id)
-        return {**m, "statuses": store.page_statuses(mag_id)}
+    def get_mag(mag_id: str, request: Request):
+        m = mag_or_404(mag_id, request)
+        st = store.page_statuses(mag_id)
+        if not is_admin(request):
+            info = next(x for x in store.magazines() if x["id"] == mag_id)
+            return {**reader_mag(info), "statuses": st}
+        return {**m, "statuses": st}
 
     @app.get("/api/mag/{mag_id}/page/{n}.png")
-    def page_png(mag_id: str, n: int, w: int = 1600):
-        m = mag_or_404(mag_id)
+    def page_png(mag_id: str, n: int, request: Request, w: int = 1600):
+        m = mag_or_404(mag_id, request)
         w = 360 if w <= 360 else 1600 if w <= 1600 else 2400
+        pub = published_image(cfg, mag_id, n, w)
+        if pub.exists():
+            return FileResponse(pub, media_type="image/webp", headers={"Cache-Control": "max-age=86400"})
+        if not m["path"] or not Path(m["path"]).exists():
+            raise HTTPException(404, "page image not found")
         p = render.cached_png(cfg.cache_dir, mag_id, Path(m["path"]), n, w)
         return FileResponse(p, media_type="image/png", headers={"Cache-Control": "max-age=86400"})
 
     @app.get("/api/mag/{mag_id}/page/{n}")
-    def page_data(mag_id: str, n: int, ensure: bool = True):
-        mag_or_404(mag_id)
-        if ensure:
+    def page_data(mag_id: str, n: int, request: Request, ensure: bool = True):
+        mag_or_404(mag_id, request)
+        admin = is_admin(request)
+        if ensure and admin:  # readers never trigger (paid) model calls
             jobs.ensure(mag_id, n)
             jobs.prefetch(mag_id, n)
         row = store.page(mag_id, n) or {"status": "none"}
-        return {"status": row.get("status"), "error": row.get("error"),
-                "data": row.get("data"), "cost": row.get("cost")}
+        out = {"status": row.get("status"), "data": row.get("data")}
+        if admin:
+            out.update(error=row.get("error"), cost=row.get("cost"))
+        elif out["status"] == "error":
+            out["error"] = "这一页暂时没有译文"
+        return out
 
     @app.post("/api/mag/{mag_id}/page/{n}/retranslate")
     def retranslate(mag_id: str, n: int):

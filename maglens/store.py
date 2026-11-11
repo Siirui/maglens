@@ -28,9 +28,10 @@ CREATE TABLE IF NOT EXISTS batches (
 
 
 class Store:
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, pages_dir: Path | None = None):
+        self.pages_dir = pages_dir  # pre-rendered page images (published deployments have no PDFs)
         self._lock = threading.RLock()
-        self._db = sqlite3.connect(str(path), check_same_thread=False)
+        self._db = sqlite3.connect(str(path), check_same_thread=False, timeout=30)
         self._db.row_factory = sqlite3.Row
         self._db.executescript(SCHEMA)
         # A crashed run may leave pages stuck in "running".
@@ -53,11 +54,16 @@ class Store:
                 "(:id,:path,:title,:series,:pages,:aspect,:mtime) ON CONFLICT(id) DO UPDATE SET "
                 "path=excluded.path, title=excluded.title, mtime=excluded.mtime", m, commit=True)
 
+    def set_series(self, mag_id: str, series: str):
+        self._q("UPDATE magazines SET series=? WHERE id=?", (series, mag_id), commit=True)
+
     def magazines(self) -> list[dict]:
         rows = self._q("SELECT m.*, (SELECT COUNT(*) FROM pages p WHERE p.mag_id=m.id AND "
-                       "p.status='done') AS done, (SELECT COALESCE(SUM(cost),0) FROM pages p "
+                       "p.status='done') AS done, (SELECT COUNT(*) FROM pages p WHERE p.mag_id=m.id "
+                       "AND p.status='error') AS errors, (SELECT COALESCE(SUM(cost),0) FROM pages p "
                        "WHERE p.mag_id=m.id) AS cost FROM magazines m ORDER BY title")
-        return [r for r in rows if Path(r["path"]).exists()]
+        return [r for r in rows if (r["path"] and Path(r["path"]).exists())
+                or (self.pages_dir and (self.pages_dir / r["id"]).is_dir())]
 
     def magazine(self, mag_id: str) -> dict | None:
         return self._q("SELECT * FROM magazines WHERE id=?", (mag_id,), one=True)

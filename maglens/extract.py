@@ -219,37 +219,47 @@ class Engine:
         return extra
 
     def _finish(self, data, blocks, terms, passes, cov, usable) -> dict:
-        out = []
-        for i, b in enumerate(blocks):
-            zh = b.get("zh", "")
-            if self.cfg.show_cny:
-                zh = add_cny(zh, self.cfg.cny_rate)
-            out.append({"id": f"b{i}", "type": b.get("type", "other"),
-                        "bbox": _clamp_bbox(b.get("bbox", [0, 0, 1, 1])),
-                        "ja": b.get("ja", ""), "zh": zh, "note": b.get("note", ""),
-                        "supplement": bool(b.get("supplement"))})
-        return {"page_kind": data.get("page_kind", "other"),
-                "page_summary": data.get("page_summary", ""),
-                "blocks": out, "new_terms": terms,
-                "meta": {"passes": passes, "coverage": None if cov is None else round(cov, 3),
-                         "text_layer": usable}}
+        return finish_page(self.cfg, data, blocks, terms, passes, cov, usable)
 
     # -- user-selected region ----------------------------------------------
     def process_region(self, mag: dict, index: int, bbox: list[float], glossary,
                        context: str | None) -> tuple[list[dict], list[dict], Usage]:
-        usage = Usage()
-        x0, y0, x1, y1 = _clamp_bbox(bbox)
-        png = render.render_png(Path(mag["path"]), index, 1800, clip=(x0, y0, x1, y1))
-        data = self._call([_img(png), {"type": "text", "text": prompts.region_text(
-            glossary=glossary, context=context)}], prompts.SUPPLEMENT_SCHEMA, usage)
-        blocks = []
-        for b in data.get("blocks", []):
-            bx0, by0, bx1, by1 = _clamp_bbox(b.get("bbox", [0, 0, 1, 1]))
-            w, h = x1 - x0, y1 - y0
-            b["bbox"] = [x0 + bx0 * w, y0 + by0 * h, x0 + bx1 * w, y0 + by1 * h]
-            b["supplement"] = True
-            blocks.append(b)
-        return blocks, data.get("new_terms", []), usage
+        return _region(self, mag, index, bbox, glossary, context)
+
+
+def finish_page(cfg: Config, data, blocks, terms, passes, cov, usable) -> dict:
+    """Normalize model output into the stored page format."""
+    out = []
+    for i, b in enumerate(blocks):
+        zh = b.get("zh", "")
+        if cfg.show_cny:
+            zh = add_cny(zh, cfg.cny_rate)
+        out.append({"id": f"b{i}", "type": b.get("type", "other"),
+                    "bbox": _clamp_bbox(b.get("bbox", [0, 0, 1, 1])),
+                    "ja": b.get("ja", ""), "zh": zh, "note": b.get("note", ""),
+                    "supplement": bool(b.get("supplement"))})
+    return {"page_kind": data.get("page_kind", "other"),
+            "page_summary": data.get("page_summary", ""),
+            "blocks": out, "new_terms": terms,
+            "meta": {"passes": passes, "coverage": None if cov is None else round(cov, 3),
+                     "text_layer": usable}}
+
+
+def _region(self, mag: dict, index: int, bbox: list[float], glossary,
+            context: str | None) -> tuple[list[dict], list[dict], Usage]:
+    usage = Usage()
+    x0, y0, x1, y1 = _clamp_bbox(bbox)
+    png = render.render_png(Path(mag["path"]), index, 1800, clip=(x0, y0, x1, y1))
+    data = self._call([_img(png), {"type": "text", "text": prompts.region_text(
+        glossary=glossary, context=context)}], prompts.SUPPLEMENT_SCHEMA, usage)
+    blocks = []
+    for b in data.get("blocks", []):
+        bx0, by0, bx1, by1 = _clamp_bbox(b.get("bbox", [0, 0, 1, 1]))
+        w, h = x1 - x0, y1 - y0
+        b["bbox"] = [x0 + bx0 * w, y0 + by0 * h, x0 + bx1 * w, y0 + by1 * h]
+        b["supplement"] = True
+        blocks.append(b)
+    return blocks, data.get("new_terms", []), usage
 
 
 class MockEngine(Engine):
@@ -273,8 +283,19 @@ class MockEngine(Engine):
         return [], [], Usage()
 
 
+class ManualEngine(MockEngine):
+    """Manual mode: the server never processes pages itself; someone writes results via Store."""
+    manual = True
+
+    def process_page(self, mag, index, glossary, prev_summary):
+        raise ExtractError("manual mode: pages are not processed automatically")
+
+
 def make_engine(cfg: Config) -> Engine:
     import os
+    if cfg.manual:
+        print("[maglens] 人工模式：不自动识别，页面等待手动写入结果")
+        return ManualEngine(cfg)
     if cfg.mock or not (os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN")
                         or Path("~/.config/anthropic").expanduser().exists()):
         print("[maglens] 未检测到 Anthropic 凭证，使用模拟模式（只显示 PDF 文字层）")

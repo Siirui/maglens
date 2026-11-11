@@ -3,27 +3,33 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
 <title>MagLens</title>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 <header id="bar">
   <a id="home" href="#/">MagLens</a>
-  <div id="crumb"></div>
+  <div id="crumb"><select id="magsel" title="切换杂志"></select></div>
   <div id="tools" hidden>
     <div class="seg" id="mode">
       <button data-mode="zh">中文</button><button data-mode="bi">对照</button><button data-mode="ja">原文</button>
     </div>
     <button id="btn-spread" title="单页 / 跨页 (S)">跨页</button>
     <button id="btn-dir" title="装订方向">右翻</button>
-    <button id="btn-boxes" title="在页面上显示所有文本框 (B)">显示框</button>
-    <button id="btn-select" title="框选一块区域重新识别 (R)">框选识别</button>
-    <button id="btn-retry" title="重新识别翻译当前页">重译</button>
-    <button id="btn-gloss">术语表</button>
-    <a id="btn-export" target="_blank">导出</a>
+    <button id="btn-boxes" class="admin-only" title="在页面上显示所有文本框 (B)">显示框</button>
+    <button id="btn-select" class="admin-only" title="框选一块区域重新识别 (R)">框选识别</button>
+    <button id="btn-retry" class="admin-only" title="重新识别翻译当前页">重译</button>
+    <button id="btn-gloss" class="admin-only">术语表</button>
+    <a id="btn-export" class="admin-only" target="_blank">导出</a>
   </div>
   <div id="status"></div>
+  <div id="user"></div>
 </header>
+<div id="progress" hidden>
+  <div class="ptext" id="ptext"></div>
+  <div class="pbar"><i id="pbar-all"></i></div>
+</div>
 
 <main id="shelf" hidden>
   <div id="shelf-head"></div>
@@ -34,9 +40,19 @@
   <section id="left">
     <div id="stage"><div id="pages"></div></div>
     <nav id="pager">
+      <div class="seg" id="fit" title="页面显示方式">
+        <button data-fit="page" title="整页放进窗口 (1)">整页</button><button data-fit="width" title="宽度撑满，上下滚动 (2)">适应宽度</button><button data-fit="height" title="高度撑满，左右滚动 (3)">适应高度</button><button data-fit="fill" title="铺满窗口，多出的部分滚动查看 (4)">铺满</button>
+      </div>
+      <span class="grow"></span>
       <button id="prev">‹</button>
       <input id="pageinput" type="number" min="1"> <span id="pagetotal"></span>
       <button id="next">›</button>
+      <span class="grow"></span>
+      <div class="zoom">
+        <button id="zoom-out" title="缩小 (−)">−</button>
+        <button id="zoom-reset" title="恢复 100% (0)">100%</button>
+        <button id="zoom-in" title="放大 (+)">+</button>
+      </div>
     </nav>
     <div id="thumbs"></div>
   </section>

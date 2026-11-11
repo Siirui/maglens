@@ -92,3 +92,80 @@ def test_region_bbox_mapped_to_page(pdf, engine):
     # region prompt has no "第 N /" marker -> FakeClient answers with main_0
     blocks, _, _ = engine.process_region(mag(pdf), 0, [0.2, 0.4, 0.6, 0.8], [], None)
     assert [round(v, 3) for v in blocks[0]["bbox"]] == [0.2, 0.4, 0.4, 0.6]
+
+
+# -- job scheduling: mock / manual modes ---------------------------------------
+def _jobs(tmp_path, pdf, engine_cls, **cfg_kw):
+    from maglens.jobs import Jobs
+    from maglens.store import Store
+    cfg = load_config(data_dir=tmp_path, **cfg_kw)
+    store = Store(cfg.db_path)
+    store.upsert_magazine({**mag(pdf), "aspect": 0.7, "mtime": 0})
+    return Jobs(cfg, store, engine_cls(cfg)), store
+
+
+def test_mock_results_are_redone_by_real_engine(tmp_path, pdf):
+    jobs, store = _jobs(tmp_path, pdf, extract.MockEngine)
+    jobs.ensure("x", 0)
+    jobs.pool.shutdown(wait=True)
+    assert store.page("x", 0)["model"] == "mock"
+    assert jobs.ensure("x", 0) == "done"          # mock engine keeps its own result
+
+    real = extract.Engine.__new__(extract.Engine)
+    real.cfg, real.client = jobs.cfg, FakeClient()
+    from maglens.jobs import Jobs
+    jobs2 = Jobs(jobs.cfg, store, real)
+    assert jobs2.ensure("x", 0) == "queued"      # placeholder is not treated as done
+    jobs2.pool.shutdown(wait=True)
+
+
+def test_manual_mode_waits_and_never_processes(tmp_path, pdf):
+    jobs, store = _jobs(tmp_path, pdf, extract.ManualEngine, manual=True)
+    assert jobs.ensure("x", 1) == "waiting"
+    jobs.prefetch("x", 1)
+    jobs.pool.shutdown(wait=True)
+    assert store.page_statuses("x") == {1: "waiting"}
+    store.save_page("x", 1, {"blocks": []}, 0.0, "manual", "v1")
+    assert jobs.ensure("x", 1) == "done"
+
+
+# -- claude -p background runner -------------------------------------------------
+def test_issue_order():
+    from maglens.cli_runner import issue_key
+    titles = ["POPEYE Special ", "popeye2026.01", "2026年 06月号", "POPEYE 2026.08 ", "popeye2026.11"]
+    assert sorted(titles, key=issue_key, reverse=True) == [
+        "popeye2026.11", "POPEYE 2026.08 ", "2026年 06月号", "popeye2026.01", "POPEYE Special "]
+
+
+def _runner(tmp_path, pdf):
+    from maglens.cli_runner import Runner
+    from maglens.store import Store
+    cfg = load_config(data_dir=tmp_path)
+    store = Store(cfg.db_path)
+    store.upsert_magazine({**mag(pdf), "aspect": 0.7, "mtime": 0})
+    fake = str(Path(__file__).resolve().parent / "fake_claude.py")
+    return Runner(cfg, store, "haiku", 2, fake), store
+
+
+def test_runner_translates_all_pages(tmp_path, pdf, capsys):
+    r, store = _runner(tmp_path, pdf)
+    store.save_page("x", 0, {"blocks": []}, 0.0, "manual", "v1")        # already done: skipped
+    r.run([store.magazine("x")])
+    assert store.page_statuses("x") == {0: "done", 1: "done", 2: "done"}
+    p = store.page("x", 2)
+    assert p["data"]["meta"]["passes"] == ["cli"] and p["model"] == "claude-haiku-5-5"
+    assert "约45元人民币" in p["data"]["blocks"][0]["zh"]
+    assert store.page("x", 1)["data"]["meta"]["coverage"] is not None   # page with text layer
+    assert {"ja": "テスト", "zh": "测试", "kind": "other", "locked": 0} in store.glossary("sample")
+    out = capsys.readouterr().out
+    assert "MAG_DONE" in out and "done=3/3" in out and "ALL_DONE" in out
+    status = json.loads((tmp_path / "runner.json").read_text())
+    assert status["state"] == "done" and status["run_done"] == 2
+
+
+def test_runner_pauses_on_limit(tmp_path, pdf, monkeypatch):
+    from maglens import cli_runner
+    r, store = _runner(tmp_path, pdf)
+    monkeypatch.setenv("FAKE_CLAUDE_MODE", "limit")
+    with pytest.raises(cli_runner.LimitError):
+        r.do_page(store.magazine("x"), 0)

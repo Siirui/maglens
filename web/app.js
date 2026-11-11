@@ -1,6 +1,19 @@
 "use strict";
 const $ = (s, el = document) => el.querySelector(s);
-const api = (p, opt) => fetch(p, opt).then(r => { if (!r.ok) throw new Error(r.status); return r.json(); });
+const api = (p, opt) => fetch(p, opt).then(r => {
+  if (r.status === 401) { location.href = "/login.html"; throw new Error("login required"); }
+  if (!r.ok) throw new Error(r.status); return r.json();
+});
+// ---------------------------------------------------------------- user / role
+const ME = { user: null, auth: false };
+const isAdmin = () => ME.user?.role === "admin";
+function setUser(user, auth) {
+  ME.user = user; ME.auth = auth;
+  document.documentElement.classList.toggle("role-reader", !isAdmin());
+  $("#user").innerHTML = auth && user
+    ? `<span class="uname">${esc(user.name)}</span><button id="logout" title="退出登录">退出</button>` : "";
+  if ($("#logout")) $("#logout").onclick = async () => { await fetch("/api/logout", { method: "POST" }); location.href = "/login.html"; };
+}
 const esc = s => (s || "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const store = {
   get(k, d) { try { const v = localStorage.getItem("maglens." + k); return v === null ? d : JSON.parse(v); } catch { return d; } },
@@ -15,6 +28,7 @@ const KIND_LABEL = { article: "文章", feature_opener: "专题开篇", toc: "�
 const S = {
   mag: null, page: 0, mode: store.get("mode", "bi"), spread: store.get("spread", false),
   rtl: store.get("rtl", true), boxes: false, selecting: false, data: {}, polls: {},
+  fit: store.get("fit", "page"), zoom: store.get("zoom", 1),
 };
 
 // ---------------------------------------------------------------- routing
@@ -28,28 +42,41 @@ async function route() {
 // ---------------------------------------------------------------- shelf
 async function showShelf() {
   $("#reader").hidden = true; $("#tools").hidden = true; $("#shelf").hidden = false;
-  $("#crumb").textContent = "";
+  $("#bar").classList.remove("reading");
   const lib = await api("/api/library");
-  $("#status").textContent = `${lib.model} · 累计 $${lib.total_cost.toFixed(2)}`;
+  setUser(lib.user, lib.auth);
+  lib.magazines.sort(byIssue);
+  if (!isAdmin()) {
+    const n = lib.magazines.filter(m => m.available).length;
+    $("#status").textContent = "";
+    $("#shelf-head").innerHTML = `共 ${n} 本可以阅读` + (n < lib.magazines.length ? ` · ${lib.magazines.length - n} 本即将上线` : "");
+  } else {
+  $("#status").textContent = lib.manual ? "" : `${lib.model} · 累计 $${lib.total_cost.toFixed(2)}`;
   $("#shelf-head").innerHTML = `目录：<code>${esc(lib.dir)}</code> · ${lib.magazines.length} 本` +
+    (lib.manual ? ` · <span class="warn">只读模式：网页不发起识别，译文由后台批处理写入</span>` : "") +
     (lib.mock ? ` · <span class="warn">模拟模式：未检测到 ANTHROPIC_API_KEY，只显示 PDF 文字层</span>` : "") +
     ` · <button id="rescan">重新扫描</button>`;
   $("#rescan").onclick = async () => { await api("/api/library/rescan", { method: "POST" }); showShelf(); };
-  $("#grid").innerHTML = lib.magazines.map(m => `
-    <a class="card" href="#/m/${m.id}" style="--ar:${m.aspect}">
-      <img loading="lazy" src="/api/mag/${m.id}/page/0.png?w=360">
-      <div class="t">${esc(m.title)}</div>
-      <div class="s">${m.pages} 页 · 已翻译 ${m.done}${m.cost ? ` · $${m.cost.toFixed(2)}` : ""}</div>
-      <div class="prog"><i style="width:${(100 * m.done / m.pages).toFixed(1)}%"></i></div>
-    </a>`).join("") || `<div class="empty">目录里没有找到 PDF。</div>`;
+  }
+  $("#grid").innerHTML = lib.magazines.map(m => {
+    const open = isAdmin() || m.available;
+    return `
+    <${open ? "a" : "div"} class="card${open ? "" : " soon"}" data-id="${m.id}" ${open ? `href="#/m/${m.id}"` : ""} style="--ar:${m.aspect}">
+      ${open ? `<img loading="lazy" src="/api/mag/${m.id}/page/0.png?w=360">` : `<div class="ph">即将上线</div>`}
+      <div class="t">${esc(m.title.trim())}</div>
+      <div class="s">${cardLine(m)}</div>
+      <div class="prog admin-only"><i style="width:${(100 * m.done / m.pages).toFixed(1)}%"></i></div>
+    </${open ? "a" : "div"}>`;
+  }).join("") || `<div class="empty">${isAdmin() ? "目录里没有找到 PDF。" : "还没有可以阅读的杂志。"}</div>`;
 }
 
 // ---------------------------------------------------------------- reader
 async function openReader(id, page) {
   $("#shelf").hidden = true; $("#reader").hidden = false; $("#tools").hidden = false;
+  $("#bar").classList.add("reading");
   if (!S.mag || S.mag.id !== id) {
     S.mag = await api(`/api/mag/${id}`); S.data = {};
-    $("#crumb").textContent = S.mag.title;
+    fillMagSelect();
     $("#pagetotal").textContent = "/ " + S.mag.pages;
     $("#btn-export").href = `/api/mag/${id}/export.md`;
     buildThumbs();
@@ -59,14 +86,75 @@ async function openReader(id, page) {
   render();
 }
 
-function fitPages() {
+// Page size = base size for the chosen fit mode × zoom.
+//   page: whole page/spread visible · width: fill the width · height: fill the height · fill: cover the stage
+const ZOOM_MIN = 0.25, ZOOM_MAX = 5;
+function basePageHeight(w, h, n) {
+  const ar = S.mag.aspect * n;                      // width / height of everything shown
+  switch (S.fit) {
+    case "width": return w / ar;
+    case "height": return h;
+    case "fill": return Math.max(h, w / ar);
+    default: return Math.min(h, w / ar);
+  }
+}
+function fitPages(anchor) {
   const st = $("#stage"), pgs = document.querySelectorAll(".pg");
   if (!S.mag || !pgs.length) return;
+  // keep the point under `anchor` (or the centre) fixed while resizing
+  const rect = st.getBoundingClientRect();
+  const ax = anchor ? anchor.x - rect.left : st.clientWidth / 2, ay = anchor ? anchor.y - rect.top : st.clientHeight / 2;
+  const oldW = st.scrollWidth, oldH = st.scrollHeight;
+  const fx = (st.scrollLeft + ax) / (oldW || 1), fy = (st.scrollTop + ay) / (oldH || 1);
+
   const w = st.clientWidth - 32, h = st.clientHeight - 32;
-  const ph = Math.floor(Math.min(h, w / (pgs.length * S.mag.aspect)));
-  pgs.forEach(p => { p.style.height = ph + "px"; p.style.width = Math.floor(ph * S.mag.aspect) + "px"; });
+  const ph = Math.max(80, Math.floor(basePageHeight(w, h, pgs.length) * S.zoom));
+  const pw = Math.floor(ph * S.mag.aspect);
+  const want = pw * (window.devicePixelRatio || 1) > 1700 ? 2400 : 1600;
+  pgs.forEach(p => {
+    p.style.height = ph + "px"; p.style.width = pw + "px";
+    const img = p.querySelector("img");
+    if (img && !img.src.endsWith("w=" + want) && !(want === 1600 && img.src.endsWith("w=2400")))
+      img.src = `/api/mag/${S.mag.id}/page/${p.dataset.page}.png?w=${want}`;
+  });
+  st.scrollLeft = fx * st.scrollWidth - ax; st.scrollTop = fy * st.scrollHeight - ay;
+  const over = st.scrollWidth > st.clientWidth + 1 || st.scrollHeight > st.clientHeight + 1;
+  st.classList.toggle("pannable", over && !S.selecting);
+  $("#zoom-reset").textContent = Math.round(S.zoom * 100) + "%";
+  document.querySelectorAll("#fit button").forEach(b => b.classList.toggle("on", b.dataset.fit === S.fit));
 }
-window.addEventListener("resize", fitPages);
+function setZoom(z, anchor) {
+  S.zoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.round(z * 100) / 100));
+  store.set("zoom", S.zoom); fitPages(anchor);
+}
+function setFit(f) { S.fit = f; store.set("fit", f); S.zoom = 1; store.set("zoom", 1); fitPages(); $("#stage").scrollTo(0, 0); }
+$("#fit").onclick = e => { if (e.target.dataset.fit) setFit(e.target.dataset.fit); };
+$("#zoom-in").onclick = () => setZoom(S.zoom * 1.25);
+$("#zoom-out").onclick = () => setZoom(S.zoom / 1.25);
+$("#zoom-reset").onclick = () => setZoom(1);
+// ⌘/Ctrl + wheel and trackpad pinch (reported as ctrl+wheel) zoom around the pointer
+$("#stage").addEventListener("wheel", e => {
+  if (!e.ctrlKey && !e.metaKey) return;
+  e.preventDefault();
+  // one mouse-wheel notch (~100px) ≈ ×1.28; trackpad pinch sends small deltas → smooth
+  setZoom(S.zoom * Math.exp(-e.deltaY * (e.deltaMode ? 0.08 : 0.0025)), { x: e.clientX, y: e.clientY });
+}, { passive: false });
+// drag to pan when the page is larger than the stage (not while box-selecting)
+$("#stage").addEventListener("mousedown", e => {
+  const st = $("#stage");
+  if (S.selecting || e.button !== 0 || !st.classList.contains("pannable") || e.target.closest(".bx")) return;
+  const x0 = e.clientX, y0 = e.clientY, sl = st.scrollLeft, stp = st.scrollTop;
+  let moved = false;
+  const move = ev => {
+    if (!moved && Math.hypot(ev.clientX - x0, ev.clientY - y0) < 4) return;
+    moved = true; st.classList.add("panning");
+    st.scrollLeft = sl - (ev.clientX - x0); st.scrollTop = stp - (ev.clientY - y0);
+  };
+  const up = () => { st.classList.remove("panning"); removeEventListener("mousemove", move); removeEventListener("mouseup", up); };
+  addEventListener("mousemove", move); addEventListener("mouseup", up);
+});
+// refit whenever the stage changes size (window resize, divider drag, progress strip appearing)
+new ResizeObserver(() => fitPages()).observe($("#stage"));
 const clampPage = p => Math.max(0, Math.min(S.mag.pages - 1, p));
 function visiblePages() {
   const p = S.page;
@@ -118,7 +206,12 @@ async function loadPage(n) {
   if (r.status === "done") {
     S.data[n] = r.data; drawPanel(n, r); drawBoxes(n); markThumb(n);
   } else if (r.status === "error") {
-    sec.innerHTML = head(n) + `<div class="empty err">这一页处理失败：${esc(r.error)}<br><button onclick="retry(${n})">重试</button></div>`;
+    sec.innerHTML = head(n) + (isAdmin()
+      ? `<div class="empty err">这一页处理失败：${esc(r.error)}<br><button onclick="retry(${n})">重试</button></div>`
+      : `<div class="empty">这一页暂时没有译文，可以先看左边的原文。</div>`);
+  } else if (r.status === "waiting") {
+    sec.innerHTML = head(n) + `<div class="empty"><div class="spinner"></div>第 ${n + 1} 页排队中…<br><small>后台批处理翻到这一页后，这里会自动刷新</small></div>`;
+    S.polls[n] = setTimeout(() => loadPage(n), 1500);
   } else {
     sec.innerHTML = head(n) + `<div class="empty"><div class="spinner"></div>正在识别并翻译第 ${n + 1} 页…<br><small>首次处理一页大约需要 20–60 秒，结果会缓存，下次秒开</small></div>`;
     S.polls[n] = setTimeout(() => loadPage(n), 1500);
@@ -126,8 +219,8 @@ async function loadPage(n) {
 }
 
 function head(n, d, r) {
-  const meta = d ? [d.meta?.coverage != null ? `文字层覆盖 ${(d.meta.coverage * 100).toFixed(0)}%` : (d.meta?.text_layer === false ? "无文字层·已做分块复查" : ""),
-    d.meta?.passes?.length > 1 ? `${d.meta.passes.length} 轮识别` : "", r?.cost ? `$${r.cost.toFixed(3)}` : ""].filter(Boolean).join(" · ") : "";
+  const meta = d ? [d.meta?.coverage != null ? `文字层覆盖 ${(d.meta.coverage * 100).toFixed(0)}%` : !isAdmin() ? "" : (d.meta?.passes?.includes("manual") ? "人工翻译" : d.meta?.passes?.includes("cli") ? "批处理" : d.meta?.text_layer === false ? "无文字层·已做分块复查" : ""),
+    d.meta?.passes?.length > 1 ? `${d.meta.passes.length} 轮识别` : "", isAdmin() && r?.cost ? `$${r.cost.toFixed(3)}` : ""].filter(Boolean).join(" · ") : "";
   return `<div class="phead"><b>P.${n + 1}</b>${d ? `<span class="kind">${KIND_LABEL[d.page_kind] || d.page_kind}</span>` : ""}<span class="meta">${meta}</span></div>`;
 }
 
@@ -240,9 +333,13 @@ document.addEventListener("keydown", e => {
   if (e.key === "ArrowLeft") go(S.rtl ? 1 : -1);
   else if (e.key === "ArrowRight") go(S.rtl ? -1 : 1);
   else if (e.key === "s") $("#btn-spread").click();
-  else if (e.key === "b") $("#btn-boxes").click();
-  else if (e.key === "r") $("#btn-select").click();
+  else if (e.key === "b" && isAdmin()) $("#btn-boxes").click();
+  else if (e.key === "r" && isAdmin()) $("#btn-select").click();
   else if (e.key === "Escape") setSelecting(false);
+  else if (e.key === "+" || e.key === "=") setZoom(S.zoom * 1.25);
+  else if (e.key === "-" || e.key === "_") setZoom(S.zoom / 1.25);
+  else if (e.key === "0") setZoom(1);
+  else if (["1", "2", "3", "4"].includes(e.key)) setFit(["page", "width", "height", "fill"][+e.key - 1]);
 });
 // resizable divider
 $("#divider").onmousedown = e => {
@@ -278,4 +375,90 @@ $("#gloss-save").onclick = async () => {
   $("#gloss").close(); $("#status").textContent = "术语表已保存（之后翻译的页面生效；已翻的页可点「重译」）";
 };
 
-route();
+// ---------------------------------------------------------------- progress + magazine switcher
+const P = { last: null };
+const cardLine = m => isAdmin()
+  ? `${m.pages} 页 · 已翻译 ${m.done}${m.cost ? ` · $${m.cost.toFixed(2)}` : ""}`
+  : (m.available ? `${m.pages} 页` : "即将上线");
+const pct = (a, b) => b ? (100 * a / b) : 0;
+// newest issue first: 'popeye2026.11' / 'POPEYE 2026.08' / '2026年 06月号'; undated (Special) last
+const issueKey = t => { const m = t.match(/(20\d\d)\D{0,3}?(\d{1,2})(?!\d)/); return m ? +m[1] * 100 + +m[2] : 0; };
+const byIssue = (a, b) => issueKey(b.title) - issueKey(a.title) || a.title.localeCompare(b.title);
+function fmtDur(s) {
+  if (s == null) return "";
+  const h = Math.floor(s / 3600), m = Math.round((s % 3600) / 60);
+  return h ? `${h} 小时 ${m} 分` : `${m} 分钟`;
+}
+function fillMagSelect() {
+  const sel = $("#magsel"), mags = P.last?.magazines;
+  if (!S.mag) return;
+  let list = mags ? [...mags].sort(byIssue) : [{ id: S.mag.id, title: S.mag.title, done: 0, pages: S.mag.pages, available: true }];
+  if (!isAdmin()) list = list.filter(m => m.available || m.id === S.mag.id);
+  sel.innerHTML = list.map(m => `<option value="${m.id}" ${m.id === S.mag.id ? "selected" : ""}>` +
+    esc(m.title.trim()) + (isAdmin() ? `　${m.done}/${m.pages}${m.done === m.pages ? " ✓" : ""}` : "") + `</option>`).join("");
+}
+$("#magsel").onchange = e => { location.hash = `#/m/${e.target.value}`; };
+
+async function pollProgress() {
+  let p;
+  try { p = await api("/api/progress"); } catch { return setTimeout(pollProgress, 10000); }
+  const prev = P.last; P.last = p;
+  if (!isAdmin()) {
+    $("#progress").hidden = true; document.documentElement.classList.remove("has-progress");
+    if (S.mag && !$("#reader").hidden && document.activeElement?.id !== "magsel") fillMagSelect();
+    return setTimeout(pollProgress, 60000);
+  }
+  const r = p.runner, live = r && ["running", "paused", "starting"].includes(r.state) &&
+    Date.now() / 1000 - (r.updated || 0) < 1800;
+  const show = live || p.done > 0;
+  $("#progress").hidden = !show;
+  document.documentElement.classList.toggle("has-progress", show);
+  if (show) {
+    $("#pbar-all").style.width = pct(p.done, p.pages).toFixed(2) + "%";
+    const parts = [`全部 <b>${p.done}</b> / ${p.pages} 页（${pct(p.done, p.pages).toFixed(1)}%）`];
+    if (live && r.current) {
+      const cur = p.magazines.find(m => m.id === r.current.id);
+      if (cur) parts.push(`正在翻 <b>${esc(cur.title.trim())}</b> ${cur.done}/${cur.pages}`);
+    }
+    if (S.mag && !$("#reader").hidden) {
+      const me = p.magazines.find(m => m.id === S.mag.id);
+      if (me && (!live || r.current?.id !== me.id)) parts.push(`本册 ${me.done}/${me.pages}`);
+    }
+    if (live && r.state === "paused") {
+      const t = r.resume_at ? new Date(r.resume_at * 1000).toLocaleTimeString().slice(0, 5) : "";
+      parts.push(`<span class="paused">已暂停（额度或限流）${t ? `，${t} 自动重试` : ""}</span>`);
+    } else if (live && r.eta_sec != null) parts.push(`预计还要 ${fmtDur(r.eta_sec)}`);
+    else if (r && r.state === "done") parts.push("批处理已完成");
+    if (p.cost) parts.push(`折算 $${p.cost.toFixed(2)}`);
+    $("#ptext").innerHTML = parts.join(" · ");
+    if (r?.model) $("#status").textContent = `批处理模型：${r.model}`;
+  }
+  // shelf cards
+  if (!$("#shelf").hidden) for (const m of p.magazines) {
+    const c = $(`.card[data-id="${m.id}"]`); if (!c) continue;
+    c.querySelector(".s").textContent = cardLine(m);
+    c.querySelector(".prog i").style.width = pct(m.done, m.pages).toFixed(1) + "%";
+    c.classList.toggle("running", !!(live && r.current?.id === m.id));
+  }
+  // reader: switcher labels + thumbnail marks for the open magazine
+  if (S.mag && !$("#reader").hidden) {
+    if (!document.activeElement || document.activeElement.id !== "magsel") fillMagSelect();
+    const me = p.magazines.find(m => m.id === S.mag.id), before = prev?.magazines.find(m => m.id === S.mag.id);
+    if (me && (!before || before.done !== me.done || live)) {
+      try {
+        const st = (await api(`/api/mag/${S.mag.id}`)).statuses || {};
+        document.querySelectorAll("#thumbs img").forEach(t => {
+          const s = st[t.dataset.page];
+          t.classList.toggle("done", s === "done"); t.classList.toggle("running", s === "running");
+        });
+      } catch {}
+    }
+  }
+  setTimeout(pollProgress, live ? 4000 : 15000);
+}
+
+(async () => {
+  try { const me = await api("/api/me"); if (me.auth && !me.user) { location.href = "/login.html"; return; } setUser(me.user, me.auth); } catch {}
+  route();
+  pollProgress();
+})();

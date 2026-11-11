@@ -1,0 +1,10 @@
+# /etc/caddy/Caddyfile — 把 mag.example.com 换成你的域名；Caddy 会自动申请并续期 HTTPS 证书
+mag.example.com {
+	encode zstd gzip
+	reverse_proxy 127.0.0.1:8765
+	header {
+		X-Robots-Tag "noindex, nofollow"
+		Referrer-Policy "same-origin"
+		-Server
+	}
+}

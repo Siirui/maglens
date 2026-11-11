@@ -22,7 +22,9 @@ class Config:
     show_cny: bool = True
     render_long_edge: int = 2000
     coverage_threshold: float = 0.92
+    reader_show_incomplete: bool = True  # readers see unfinished issues as "即将上线" (not openable)
     mock: bool = False
+    manual: bool = False  # don't process pages; results are written to the DB by hand
     extra: dict = field(default_factory=dict)
 
     @property
@@ -39,7 +41,7 @@ def load_config(path: Path | None = None, **overrides) -> Config:
     raw: dict = {}
     if path.exists():
         raw = tomllib.loads(path.read_text(encoding="utf-8"))
-    lib, mdl, tr, ex = (raw.get(k, {}) for k in ("library", "model", "translate", "extract"))
+    lib, mdl, tr, ex, rd = (raw.get(k, {}) for k in ("library", "model", "translate", "extract", "reader"))
     cfg = Config(
         library_dir=Path(lib.get("dir", "~/Downloads/2026")).expanduser(),
         data_dir=Path(lib.get("data_dir", "~/.maglens")).expanduser(),
@@ -53,6 +55,7 @@ def load_config(path: Path | None = None, **overrides) -> Config:
         show_cny=bool(tr.get("show_cny", True)),
         render_long_edge=int(ex.get("render_long_edge", 2000)),
         coverage_threshold=float(ex.get("coverage_threshold", 0.92)),
+        reader_show_incomplete=bool(rd.get("show_incomplete", True)),
     )
     for k, v in overrides.items():
         if v is None:

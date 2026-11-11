@@ -1,0 +1,4 @@
+-r requirements.txt
+pytest
+httpx       # FastAPI TestClient
+playwright  # UI screenshots (python -m playwright install chromium)
