@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MagLens</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header id="bar">
+  <a id="home" href="#/">MagLens</a>
+  <div id="crumb"></div>
+  <div id="tools" hidden>
+    <div class="seg" id="mode">
+      <button data-mode="zh">中文</button><button data-mode="bi">对照</button><button data-mode="ja">原文</button>
+    </div>
+    <button id="btn-spread" title="单页 / 跨页 (S)">跨页</button>
+    <button id="btn-dir" title="装订方向">右翻</button>
+    <button id="btn-boxes" title="在页面上显示所有文本框 (B)">显示框</button>
+    <button id="btn-select" title="框选一块区域重新识别 (R)">框选识别</button>
+    <button id="btn-retry" title="重新识别翻译当前页">重译</button>
+    <button id="btn-gloss">术语表</button>
+    <a id="btn-export" target="_blank">导出</a>
+  </div>
+  <div id="status"></div>
+</header>
+
+<main id="shelf" hidden>
+  <div id="shelf-head"></div>
+  <div id="grid"></div>
+</main>
+
+<main id="reader" hidden>
+  <section id="left">
+    <div id="stage"><div id="pages"></div></div>
+    <nav id="pager">
+      <button id="prev">‹</button>
+      <input id="pageinput" type="number" min="1"> <span id="pagetotal"></span>
+      <button id="next">›</button>
+    </nav>
+    <div id="thumbs"></div>
+  </section>
+  <div id="divider"></div>
+  <section id="right"><div id="panel"></div></section>
+</main>
+
+<dialog id="gloss">
+  <form method="dialog">
+    <h2>术语表 <small id="gloss-series"></small></h2>
+    <p class="hint">同一系列（如所有 POPEYE）共用一份术语表。模型遇到新的专有名词会自动加进来；你改过的条目会被锁定，后面的页面都按它翻译。</p>
+    <input id="gloss-filter" placeholder="搜索…">
+    <div id="gloss-table"></div>
+    <div class="row">
+      <button type="button" id="gloss-add">+ 添加</button>
+      <span class="grow"></span>
+      <button value="cancel">取消</button>
+      <button type="button" id="gloss-save" class="primary">保存</button>
+    </div>
+  </form>
+</dialog>
+<script src="app.js"></script>
+</body>
+</html>

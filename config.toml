@@ -1,0 +1,31 @@
+# MagLens 配置
+[library]
+# 杂志 PDF 所在目录（可用 --dir 覆盖）
+dir = "~/Downloads/2026"
+# 缓存/数据库位置
+data_dir = "~/.maglens"
+
+[model]
+# 主模型：识别 + 翻译。省钱可改 "claude-sonnet-5-5" 或 "claude-haiku-5-5"
+name = "claude-opus-5-5"
+# low | medium | high | xhigh | max —— 越高越细致也越贵
+effort = "medium"
+# 是否开启服务端拒答回退（仅 Claude API 直连）
+fallbacks = true
+# 并发处理页数
+concurrency = 3
+# 打开某页时后台预取后面几页
+prefetch = 2
+
+[translate]
+# 目标风格（会写进系统提示）
+style = "mainland_lifestyle"
+# 价格是否附上约合人民币
+cny_rate = 0.047
+show_cny = true
+
+[extract]
+# 识别用图片长边像素
+render_long_edge = 2000
+# 文字层覆盖率低于此值时触发补漏
+coverage_threshold = 0.92
