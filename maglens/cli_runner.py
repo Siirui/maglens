@@ -3,7 +3,7 @@
 This path needs no Anthropic API key: each page is one `claude -p` call that runs under the
 user's own Claude subscription (and its usage credits once plan limits are hit).
 
-    python -m maglens.cli_runner --dir ~/Downloads/2026 --series popeye --model haiku
+    python -m maglens.cli_runner --series popeye --model haiku      # 杂志目录默认读 config.toml
 
 Magazines are processed newest issue first, one at a time; pages within an issue run
 concurrently. Progress is written to the shared SQLite DB (the web UI picks it up) and to

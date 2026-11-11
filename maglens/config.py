@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parent.parent
 
 @dataclass
 class Config:
-    library_dir: Path = Path("~/Downloads/2026").expanduser()
+    library_dir: Path = Path("~/Magazines/2026").expanduser()
     data_dir: Path = Path("~/.maglens").expanduser()
     model: str = "claude-opus-5-5"
     effort: str = "medium"
@@ -43,7 +43,7 @@ def load_config(path: Path | None = None, **overrides) -> Config:
         raw = tomllib.loads(path.read_text(encoding="utf-8"))
     lib, mdl, tr, ex, rd = (raw.get(k, {}) for k in ("library", "model", "translate", "extract", "reader"))
     cfg = Config(
-        library_dir=Path(lib.get("dir", "~/Downloads/2026")).expanduser(),
+        library_dir=Path(lib.get("dir", "~/Magazines/2026")).expanduser(),
         data_dir=Path(lib.get("data_dir", "~/.maglens")).expanduser(),
         model=mdl.get("name", "claude-opus-5-5"),
         effort=mdl.get("effort", "medium"),

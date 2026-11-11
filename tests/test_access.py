@@ -15,7 +15,6 @@ from maglens import extract, publish  # noqa: E402
 from maglens.auth import Auth, hash_password, verify_password  # noqa: E402
 from maglens.config import load_config  # noqa: E402
 from maglens.server import create_app  # noqa: E402
-from maglens.store import Store  # noqa: E402
 
 
 @pytest.fixture(scope="module")
