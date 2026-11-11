@@ -1,7 +1,7 @@
 # MagLens 配置
 [library]
 # 杂志 PDF 所在目录（可用 --dir 覆盖）
-dir = "~/Downloads/2026"
+dir = "~/Magazines/2026"
 # 缓存/数据库位置
 data_dir = "~/.maglens"
 
