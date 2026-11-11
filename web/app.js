@@ -76,6 +76,7 @@ async function openReader(id, page) {
   $("#bar").classList.add("reading");
   if (!S.mag || S.mag.id !== id) {
     S.mag = await api(`/api/mag/${id}`); S.data = {};
+    setOrder();
     fillMagSelect();
     $("#pagetotal").textContent = "/ " + S.mag.pages;
     $("#btn-export").href = `/api/mag/${id}/export.md`;
@@ -139,6 +140,21 @@ $("#stage").addEventListener("wheel", e => {
   // one mouse-wheel notch (~100px) ≈ ×1.28; trackpad pinch sends small deltas → smooth
   setZoom(S.zoom * Math.exp(-e.deltaY * (e.deltaMode ? 0.08 : 0.0025)), { x: e.clientX, y: e.clientY });
 }, { passive: false });
+// swipe left/right to turn pages (touch), unless zoomed in far enough to pan
+{
+  let t0 = null;
+  $("#stage").addEventListener("touchstart", e => {
+    t0 = e.touches.length === 1 && !$("#stage").classList.contains("pannable") && !S.selecting
+      ? { x: e.touches[0].clientX, y: e.touches[0].clientY, t: Date.now() } : null;
+  }, { passive: true });
+  $("#stage").addEventListener("touchend", e => {
+    if (!t0) return;
+    const dx = e.changedTouches[0].clientX - t0.x, dy = e.changedTouches[0].clientY - t0.y;
+    if (Math.abs(dx) > 50 && Math.abs(dx) > 1.5 * Math.abs(dy) && Date.now() - t0.t < 800)
+      go(dx > 0 ? (S.rtl ? 1 : -1) : (S.rtl ? -1 : 1));   // same as ←/→
+    t0 = null;
+  }, { passive: true });
+}
 // drag to pan when the page is larger than the stage (not while box-selecting)
 $("#stage").addEventListener("mousedown", e => {
   const st = $("#stage");
@@ -155,19 +171,28 @@ $("#stage").addEventListener("mousedown", e => {
 });
 // refit whenever the stage changes size (window resize, divider drag, progress strip appearing)
 new ResizeObserver(() => fitPages()).observe($("#stage"));
-const clampPage = p => Math.max(0, Math.min(S.mag.pages - 1, p));
+// Reading order = every page except promo pages a PDF distributor slipped in (server: `skip`).
+// Spreads are paired along this order, so left/right pages still line up after an inserted page.
+function setOrder() {
+  S.skip = new Set(S.mag.skip || []);
+  S.order = [...Array(S.mag.pages).keys()].filter(i => !S.skip.has(i));
+  if (!S.order.length) { S.skip = new Set(); S.order = [...Array(S.mag.pages).keys()]; }
+}
+const posOf = p => Math.max(0, S.order.indexOf(p));
+const clampPage = p => {
+  p = Math.max(0, Math.min(S.mag.pages - 1, p));
+  return S.skip.has(p) ? (S.order.find(i => i > p) ?? S.order[S.order.length - 1]) : p;
+};
 function visiblePages() {
-  const p = S.page;
-  if (!S.spread || p === 0) return [p];
-  const a = p % 2 ? p : p - 1; // spreads: [1,2] [3,4] ... (cover alone)
-  return a + 1 < S.mag.pages ? [a, a + 1] : [a];
+  const o = S.order, pos = posOf(S.page);
+  if (!S.spread || pos === 0) return [o[pos]];
+  const a = pos % 2 ? pos : pos - 1; // spreads: [1,2] [3,4] ... (cover alone)
+  return a + 1 < o.length ? [o[a], o[a + 1]] : [o[a]];
 }
 function go(delta) {
-  const step = S.spread && S.page > 0 ? 2 : 1;
-  let base = visiblePages()[0];
-  let next = delta > 0 ? base + (S.spread && S.page === 0 ? 1 : step) : base - step;
-  if (S.spread && next > 0 && next % 2 === 0) next -= 1;
-  location.hash = `#/m/${S.mag.id}/${clampPage(next) + 1}`;
+  const vis = visiblePages();
+  const pos = Math.max(0, Math.min(S.order.length - 1, delta > 0 ? posOf(vis[vis.length - 1]) + 1 : posOf(vis[0]) - 1));
+  location.hash = `#/m/${S.mag.id}/${S.order[pos] + 1}`;
 }
 
 function render() {
@@ -218,6 +243,10 @@ async function loadPage(n) {
   }
 }
 
+// Translator notes worth showing a reader: real background, not the model talking about its own process
+const NOTE_META = /保留|原样|录入|辨认|辨识|校对|核对|术语表|页眉|页脚|小标|标志|logo|印花|装饰|合并|直译|推断|字样|手写|手绘|版面|排版|页码|无需翻译|不翻译|略去|省略|识别|中文原文|非日文|对话框|按原|照片|栏目名|税|待确认|统一译/i;
+const showNote = note => !!note && (isAdmin() || (note.length >= 12 && !NOTE_META.test(note)));
+
 function head(n, d, r) {
   const meta = d ? [d.meta?.coverage != null ? `文字层覆盖 ${(d.meta.coverage * 100).toFixed(0)}%` : !isAdmin() ? "" : (d.meta?.passes?.includes("manual") ? "人工翻译" : d.meta?.passes?.includes("cli") ? "批处理" : d.meta?.text_layer === false ? "无文字层·已做分块复查" : ""),
     d.meta?.passes?.length > 1 ? `${d.meta.passes.length} 轮识别` : "", isAdmin() && r?.cost ? `$${r.cost.toFixed(3)}` : ""].filter(Boolean).join(" · ") : "";
@@ -231,9 +260,11 @@ function drawPanel(n, r) {
       <div class="tag">${TYPE_LABEL[b.type] || b.type}${b.supplement ? `<span class="sup">补漏</span>` : ""}</div>
       <div class="zh">${esc(b.zh)}</div>
       ${b.ja ? `<div class="ja" lang="ja">${esc(b.ja)}</div>` : ""}
-      ${b.note ? `<div class="note">${esc(b.note)}</div>` : ""}
+      ${showNote(b.note) ? `<div class="note">${esc(b.note)}</div>` : ""}
     </div>`).join("");
-  sec.innerHTML = head(n, d, r) + (d.page_summary ? `<div class="summary">${esc(d.page_summary)}</div>` : "") +
+  // readers only get the AI page summary when the page has no text of its own (e.g. a photo page)
+  const hasText = d.blocks.some(b => b.type !== "meta" && b.zh);
+  sec.innerHTML = head(n, d, r) + (d.page_summary && (isAdmin() || !hasText) ? `<div class="summary">${esc(d.page_summary)}</div>` : "") +
     (blocks || `<div class="empty">这一页没有识别到文字</div>`);
   sec.querySelectorAll(".blk").forEach(el => {
     el.onmouseenter = () => activate(n, el.dataset.id, false);
@@ -302,7 +333,7 @@ function bindSelect(pg) {
 // ---------------------------------------------------------------- thumbs
 function buildThumbs() {
   const st = S.mag.statuses || {};
-  $("#thumbs").innerHTML = Array.from({ length: S.mag.pages }, (_, i) =>
+  $("#thumbs").innerHTML = S.order.map(i =>
     `<img loading="lazy" data-page="${i}" class="${st[i] === "done" ? "done" : ""}" src="/api/mag/${S.mag.id}/page/${i}.png?w=360" title="P.${i + 1}">`).join("");
   $("#thumbs").onclick = e => { const p = e.target.dataset?.page; if (p) location.hash = `#/m/${S.mag.id}/${+p + 1}`; };
 }
@@ -410,7 +441,7 @@ async function pollProgress() {
   }
   const r = p.runner, live = r && ["running", "paused", "starting"].includes(r.state) &&
     Date.now() / 1000 - (r.updated || 0) < 1800;
-  const show = live || p.done > 0;
+  const show = !!live;
   $("#progress").hidden = !show;
   document.documentElement.classList.toggle("has-progress", show);
   if (show) {

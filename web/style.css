@@ -187,3 +187,5 @@ dialog small { color: var(--ink3); font-weight: 400; }
   #pager .zoom #zoom-reset { min-width: 44px; }
   #progress { padding: 0 10px; gap: 8px; }
 }
+.role-reader .blk .tag { display: none; }
+.role-reader .phead .kind { display: none; }

@@ -35,6 +35,25 @@ ADMIN_ONLY = [  # (method, path regex)
 WIDTHS = (360, 1600, 2400)
 
 
+# Pages a PDF distributor slipped in (Chinese promo / QR-code pages): skipped when reading, and left
+# out when pairing spreads so left/right pages line up again.
+_KANA = re.compile(r"[\u3040-\u30ff]")
+_PROMO = re.compile(r"我读网|wodu|阿静杂志|资源站|资源库|站长|推广页|非杂志内容|不是 ?POPEYE|并非 ?POPEYE|"
+                    r"二维码名片|扫一扫|代找|微信.{0,12}二维码")
+
+
+def inserted_pages(store: Store, mag_id: str) -> list[int]:
+    out = []
+    for row in store.all_pages(mag_id):
+        d = row["data"] or {}
+        blocks = d.get("blocks", [])
+        text = (d.get("page_summary") or "") + " ".join(b.get("zh", "") for b in blocks)
+        kana = len(_KANA.findall("".join(b.get("ja", "") for b in blocks)))
+        if kana <= 20 and _PROMO.search(text):
+            out.append(row["page"])
+    return out
+
+
 def available(m: dict) -> bool:
     """Every page has a final result (translated, or failed for good)."""
     return m["done"] + m.get("errors", 0) >= m["pages"]
@@ -58,6 +77,13 @@ def create_app(cfg: Config, engine=None) -> FastAPI:
     async def session(request: Request, call_next):
         path = request.url.path
         if not auth.enabled:
+            # No accounts yet: only direct local access is trusted. Anything coming through a reverse
+            # proxy (Caddy adds X-Forwarded-For) or from another machine is refused, so a server
+            # started before `maglens.users add` never hands out admin access.
+            client = request.client.host if request.client else ""
+            if request.headers.get("x-forwarded-for") or client not in ("127.0.0.1", "::1", "localhost", "testclient"):
+                return PlainTextResponse("MagLens：还没有创建账号。请先在服务器上运行 "
+                                         "python -m maglens.users add <名字> --role admin", status_code=403)
             request.state.user = LOCAL_ADMIN
         else:
             request.state.user = auth.read_token(request.cookies.get(COOKIE))
@@ -153,11 +179,11 @@ def create_app(cfg: Config, engine=None) -> FastAPI:
     @app.get("/api/mag/{mag_id}")
     def get_mag(mag_id: str, request: Request):
         m = mag_or_404(mag_id, request)
-        st = store.page_statuses(mag_id)
+        st, skip = store.page_statuses(mag_id), inserted_pages(store, mag_id)
         if not is_admin(request):
             info = next(x for x in store.magazines() if x["id"] == mag_id)
-            return {**reader_mag(info), "statuses": st}
-        return {**m, "statuses": st}
+            return {**reader_mag(info), "statuses": st, "skip": skip}
+        return {**m, "statuses": st, "skip": skip}
 
     @app.get("/api/mag/{mag_id}/page/{n}.png")
     def page_png(mag_id: str, n: int, request: Request, w: int = 1600):

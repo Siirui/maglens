@@ -158,3 +158,26 @@ def test_publish_and_serve_without_pdfs(libdir, tmp_path):
     r = c.get(f"/api/mag/{done}/page/1.png?w=1600")
     assert r.status_code == 200 and r.headers["content-type"] == "image/webp"
     assert c.get(f"/api/mag/{done}/page/1").json()["data"]["blocks"][0]["zh"] == "测"
+
+
+def test_inserted_promo_pages_are_detected(libdir, tmp_path):
+    from maglens.server import inserted_pages
+    _, store = make_app(libdir, tmp_path)
+    a, _ = ids(store)
+
+    def put(n, summary, ja, zh="", kind="ad"):
+        store.save_page(a, n, {"page_kind": kind, "page_summary": summary, "blocks": [
+            {"id": "b0", "type": "ad_copy", "bbox": [0, 0, 1, 1], "ja": ja, "zh": zh, "note": ""}],
+            "meta": {}}, 0, "m", "v1")
+    put(0, "这一页不是 POPEYE 的正文，而是中文推广页（我读网 wodu518.com）", "", "海量高清杂志资源")
+    put(1, "Stone Island 品牌广告页（英文原文，并非日文）", "STONE ISLAND", "Stone Island")
+    put(2, "店铺介绍：店长推荐的二维码菜单", "店長おすすめのメニューはこちら。QRコードを読み取ってください。" * 3)
+    assert inserted_pages(store, a) == [0]
+
+
+def test_no_accounts_refuses_proxied_or_remote_requests(libdir, tmp_path):
+    app, _ = make_app(libdir, tmp_path)
+    c = TestClient(app)
+    assert c.get("/api/library").status_code == 200                                     # local: admin
+    assert c.get("/api/library", headers={"X-Forwarded-For": "1.2.3.4"}).status_code == 403
+    assert TestClient(app, client=("203.0.113.9", 5000)).get("/").status_code == 403
