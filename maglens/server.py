@@ -135,10 +135,11 @@ def create_app(cfg: Config, engine=None) -> FastAPI:
 
     def reader_mag(m: dict) -> dict:
         return {"id": m["id"], "title": m["title"], "series": m["series"], "pages": m["pages"],
-                "aspect": m["aspect"], "done": m["done"], "available": available(m)}
+                "aspect": m["aspect"], "done": m["done"], "available": available(m), "cover": m.get("cover", 0)}
 
     def visible_mags(request: Request) -> list[dict]:
-        mags = store.magazines()
+        covers = store.covers()
+        mags = [{**m, "cover": covers.get(m["id"], 0)} for m in store.magazines()]
         if is_admin(request):
             return [{**m, "available": available(m)} for m in mags]
         out = [reader_mag(m) for m in mags]
@@ -172,8 +173,9 @@ def create_app(cfg: Config, engine=None) -> FastAPI:
                 runner = None
         return {"done": sum(m["done"] for m in mags), "pages": sum(m["pages"] for m in mags),
                 "cost": round(store.total_cost(), 4),
-                "magazines": [{"id": m["id"], "title": m["title"], "done": m["done"], "pages": m["pages"],
-                               "available": m["available"], "cost": round(m["cost"] or 0, 4)} for m in mags],
+                "magazines": [{"id": m["id"], "title": m["title"], "series": m["series"], "done": m["done"],
+                               "pages": m["pages"], "available": m["available"], "cover": m["cover"],
+                               "cost": round(m["cost"] or 0, 4)} for m in mags],
                 "runner": runner}
 
     @app.get("/api/mag/{mag_id}")

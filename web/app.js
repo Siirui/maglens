@@ -46,26 +46,21 @@ async function showShelf() {
   const lib = await api("/api/library");
   setUser(lib.user, lib.auth);
   lib.magazines.sort(byIssue);
-  if (!isAdmin()) {
-    const n = lib.magazines.filter(m => m.available).length;
-    $("#status").textContent = "";
-    $("#shelf-head").innerHTML = `共 ${n} 本可以阅读` + (n < lib.magazines.length ? ` · ${lib.magazines.length - n} 本即将上线` : "");
-  } else {
-  $("#status").textContent = lib.manual ? "" : `${lib.model} · 累计 $${lib.total_cost.toFixed(2)}`;
-  $("#shelf-head").innerHTML = `目录：<code>${esc(lib.dir)}</code> · ${lib.magazines.length} 本` +
-    (lib.manual ? ` · <span class="warn">只读模式：网页不发起识别，译文由后台批处理写入</span>` : "") +
-    (lib.mock ? ` · <span class="warn">模拟模式：未检测到 ANTHROPIC_API_KEY，只显示 PDF 文字层</span>` : "") +
-    ` · <button id="rescan">重新扫描</button>`;
-  $("#rescan").onclick = async () => { await api("/api/library/rescan", { method: "POST" }); showShelf(); };
-  }
+  const ready = lib.magazines.filter(m => m.available).length;
+  $("#status").textContent = "";
+  $("#shelf-head").innerHTML = isAdmin()
+    ? `${lib.magazines.length} 本` + (lib.mock ? ` · <span class="warn">模拟模式：未检测到 ANTHROPIC_API_KEY</span>` : "") +
+      ` <button id="rescan" title="杂志目录：${esc(lib.dir)}">重新扫描</button>`
+    : `${ready} 本可以阅读` + (ready < lib.magazines.length ? ` · ${lib.magazines.length - ready} 本即将上线` : "");
+  if ($("#rescan")) $("#rescan").onclick = async () => { await api("/api/library/rescan", { method: "POST" }); showShelf(); };
   $("#grid").innerHTML = lib.magazines.map(m => {
     const open = isAdmin() || m.available;
     return `
-    <${open ? "a" : "div"} class="card${open ? "" : " soon"}" data-id="${m.id}" ${open ? `href="#/m/${m.id}"` : ""} style="--ar:${m.aspect}">
-      ${open ? `<img loading="lazy" src="/api/mag/${m.id}/page/0.png?w=360">` : `<div class="ph">即将上线</div>`}
-      <div class="t">${esc(m.title.trim())}</div>
+    <${open ? "a" : "div"} class="card${open ? "" : " soon"}" data-id="${m.id}" ${open ? `href="#/m/${m.id}"` : ""}>
+      ${open ? `<img loading="lazy" alt="" src="/api/mag/${m.id}/page/${m.cover || 0}.png?w=360">` : `<div class="ph">即将上线</div>`}
+      <div class="t">${esc(issueName(m))}</div>
       <div class="s">${cardLine(m)}</div>
-      <div class="prog admin-only"><i style="width:${(100 * m.done / m.pages).toFixed(1)}%"></i></div>
+      ${isAdmin() && m.done < m.pages ? `<div class="prog"><i style="width:${(100 * m.done / m.pages).toFixed(1)}%"></i></div>` : ""}
     </${open ? "a" : "div"}>`;
   }).join("") || `<div class="empty">${isAdmin() ? "目录里没有找到 PDF。" : "还没有可以阅读的杂志。"}</div>`;
 }
@@ -253,17 +248,21 @@ function head(n, d, r) {
   return `<div class="phead"><b>P.${n + 1}</b>${d ? `<span class="kind">${KIND_LABEL[d.page_kind] || d.page_kind}</span>` : ""}<span class="meta">${meta}</span></div>`;
 }
 
+// "2", "#1", "A": photo numbers and markers. Nothing to read, so keep them out of the panel.
+const squash = s => (s || "").replace(/\s+/g, "").toLowerCase();
+const trivial = b => { const z = squash(b.zh); return z.length <= 3 && !/[\u3040-\u30ff\u4e00-\u9fff]/.test(z); };
+
 function drawPanel(n, r) {
   const d = r.data, sec = $(`.psec[data-page="${n}"]`);
-  const blocks = d.blocks.map(b => `
+  const blocks = d.blocks.filter(b => !trivial(b)).map(b => `
     <div class="blk t-${b.type}" data-id="${b.id}" data-page="${n}">
       <div class="tag">${TYPE_LABEL[b.type] || b.type}${b.supplement ? `<span class="sup">补漏</span>` : ""}</div>
       <div class="zh">${esc(b.zh)}</div>
-      ${b.ja ? `<div class="ja" lang="ja">${esc(b.ja)}</div>` : ""}
+      ${b.ja && squash(b.ja) !== squash(b.zh) ? `<div class="ja" lang="ja">${esc(b.ja)}</div>` : ""}
       ${showNote(b.note) ? `<div class="note">${esc(b.note)}</div>` : ""}
     </div>`).join("");
   // readers only get the AI page summary when the page has no text of its own (e.g. a photo page)
-  const hasText = d.blocks.some(b => b.type !== "meta" && b.zh);
+  const hasText = d.blocks.some(b => b.type !== "meta" && b.zh && !trivial(b));
   sec.innerHTML = head(n, d, r) + (d.page_summary && (isAdmin() || !hasText) ? `<div class="summary">${esc(d.page_summary)}</div>` : "") +
     (blocks || `<div class="empty">这一页没有识别到文字</div>`);
   sec.querySelectorAll(".blk").forEach(el => {
@@ -408,13 +407,21 @@ $("#gloss-save").onclick = async () => {
 
 // ---------------------------------------------------------------- progress + magazine switcher
 const P = { last: null };
-const cardLine = m => isAdmin()
-  ? `${m.pages} 页 · 已翻译 ${m.done}${m.cost ? ` · $${m.cost.toFixed(2)}` : ""}`
-  : (m.available ? `${m.pages} 页` : "即将上线");
+const cardLine = m => `${seriesName(m)} · ` + (isAdmin()
+  ? (m.done < m.pages ? `已翻译 ${m.done}/${m.pages}` : `${m.pages} 页`) + (m.cost ? ` · $${m.cost.toFixed(2)}` : "")
+  : (m.available ? `${m.pages} 页` : "即将上线"));
 const pct = (a, b) => b ? (100 * a / b) : 0;
 // newest issue first: 'popeye2026.11' / 'POPEYE 2026.08' / '2026年 06月号'; undated (Special) last
 const issueKey = t => { const m = t.match(/(20\d\d)\D{0,3}?(\d{1,2})(?!\d)/); return m ? +m[1] * 100 + +m[2] : 0; };
 const byIssue = (a, b) => issueKey(b.title) - issueKey(a.title) || a.title.localeCompare(b.title);
+// "popeye2026.11" / "POPEYE 2026.08 " / "2026年 06月号" -> "2026年11月号"; undated -> what follows the series name
+const seriesName = m => (m.series || "").toUpperCase() || "杂志";
+function issueName(m) {
+  const k = issueKey(m.title);
+  if (k) return `${Math.floor(k / 100)}年${k % 100}月号`;
+  const s = (m.series || "").toLowerCase(), t = m.title.trim();
+  return (s && t.toLowerCase().startsWith(s) ? t.slice(s.length).trim() : "") || t;
+}
 function fmtDur(s) {
   if (s == null) return "";
   const h = Math.floor(s / 3600), m = Math.round((s % 3600) / 60);
@@ -425,8 +432,11 @@ function fillMagSelect() {
   if (!S.mag) return;
   let list = mags ? [...mags].sort(byIssue) : [{ id: S.mag.id, title: S.mag.title, done: 0, pages: S.mag.pages, available: true }];
   if (!isAdmin()) list = list.filter(m => m.available || m.id === S.mag.id);
-  sel.innerHTML = list.map(m => `<option value="${m.id}" ${m.id === S.mag.id ? "selected" : ""}>` +
-    esc(m.title.trim()) + (isAdmin() ? `　${m.done}/${m.pages}${m.done === m.pages ? " ✓" : ""}` : "") + `</option>`).join("");
+  sel.innerHTML = list.map(m => {
+    const mm = { ...m, series: m.series || S.mag.series };
+    return `<option value="${m.id}" ${m.id === S.mag.id ? "selected" : ""}>` + esc(`${seriesName(mm)} ${issueName(mm)}`) +
+      (isAdmin() && m.done < m.pages ? `（${m.done}/${m.pages}）` : "") + `</option>`;
+  }).join("");
 }
 $("#magsel").onchange = e => { location.hash = `#/m/${e.target.value}`; };
 
@@ -462,13 +472,12 @@ async function pollProgress() {
     else if (r && r.state === "done") parts.push("批处理已完成");
     if (p.cost) parts.push(`折算 $${p.cost.toFixed(2)}`);
     $("#ptext").innerHTML = parts.join(" · ");
-    if (r?.model) $("#status").textContent = `批处理模型：${r.model}`;
   }
   // shelf cards
   if (!$("#shelf").hidden) for (const m of p.magazines) {
     const c = $(`.card[data-id="${m.id}"]`); if (!c) continue;
     c.querySelector(".s").textContent = cardLine(m);
-    c.querySelector(".prog i").style.width = pct(m.done, m.pages).toFixed(1) + "%";
+    const bar = c.querySelector(".prog i"); if (bar) bar.style.width = pct(m.done, m.pages).toFixed(1) + "%";
     c.classList.toggle("running", !!(live && r.current?.id === m.id));
   }
   // reader: switcher labels + thumbnail marks for the open magazine

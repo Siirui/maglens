@@ -65,6 +65,20 @@ class Store:
         return [r for r in rows if (r["path"] and Path(r["path"]).exists())
                 or (self.pages_dir and (self.pages_dir / r["id"]).is_dir())]
 
+    def covers(self) -> dict[str, int]:
+        """Front-cover page per magazine: page 0 if the model called it a cover, otherwise the first
+        'cover' page that carries the masthead (scans sometimes start elsewhere; back covers are
+        labelled 'cover' too)."""
+        rows = self._q("SELECT mag_id, page, (data LIKE '%ISSUE%' OR data LIKE '%Magazine for%') AS mast "
+                       "FROM pages WHERE status='done' AND json_extract(data,'$.page_kind')='cover' "
+                       "ORDER BY mag_id, page")
+        out: dict[str, tuple[int, bool]] = {}
+        for r in rows:
+            cur = out.get(r["mag_id"])
+            if cur is None or (cur[0] != 0 and (r["page"] == 0 or (r["mast"] and not cur[1]))):
+                out[r["mag_id"]] = (r["page"], bool(r["mast"]))
+        return {k: v[0] for k, v in out.items()}
+
     def magazine(self, mag_id: str) -> dict | None:
         return self._q("SELECT * FROM magazines WHERE id=?", (mag_id,), one=True)
 
