@@ -181,3 +181,14 @@ def test_no_accounts_refuses_proxied_or_remote_requests(libdir, tmp_path):
     assert c.get("/api/library").status_code == 200                                     # local: admin
     assert c.get("/api/library", headers={"X-Forwarded-For": "1.2.3.4"}).status_code == 403
     assert TestClient(app, client=("203.0.113.9", 5000)).get("/").status_code == 403
+
+
+def test_login_rate_limit(libdir, tmp_path):
+    app, _ = make_app(libdir, tmp_path, users=[("amy", "reader")])
+    c = TestClient(app)
+    for _ in range(10):
+        assert c.post("/api/login", json={"name": "amy", "password": "nope"}).status_code == 401
+    r = c.post("/api/login", json={"name": "amy", "password": "pw-amy"})
+    assert r.status_code == 429 and "15 分钟" in r.json()["detail"]   # even the right password waits
+    other = TestClient(app, client=("198.51.100.7", 5000))
+    assert other.post("/api/login", json={"name": "amy", "password": "pw-amy"}).status_code == 200

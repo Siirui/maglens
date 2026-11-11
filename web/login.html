@@ -42,7 +42,8 @@ f.onsubmit = async e => {
     const r = await fetch("/api/login", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name: document.getElementById("name").value, password: document.getElementById("pw").value }) });
     if (r.ok) return location.replace("/");
-    err.textContent = r.status === 401 ? "用户名或密码不对" : "登录失败（" + r.status + "）";
+    const detail = (await r.json().catch(() => ({}))).detail;
+    err.textContent = typeof detail === "string" ? detail : "登录失败（" + r.status + "）";
   } catch { err.textContent = "连不上服务器"; }
   btn.disabled = false;
 };

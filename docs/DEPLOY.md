@@ -8,51 +8,53 @@
 服务器：Caddy (HTTPS) ──> uvicorn (run.py --manual) ──> 读 data/
 ```
 
+## 设计决策（2026-11-11 定）
+- **放境外（香港），不做 ICP 备案。** 读者在大陆，香港延迟最低；服务器不调模型，所以不受「Anthropic API 不支持香港」的限制。
+- **所有涉及模型的功能只在本机用，永不开放给读者。** 有三层保证：服务器上没有 API key 且跑 `--manual`（`ManualEngine` 什么都不做）；后端 `ADMIN_ONLY` 拦截重译、框选识别、术语表、导出，读者直接请求会返回 403；`page_data` 只有 admin 才会触发翻译。
+- **同步 WebP，不同步 PDF。** 实测 `popeye2026.11`（177 页）：PDF 257MB，三档 WebP 约 98MB。读者只需要图和译文，PDF 文字层只在本机翻译时用。完整原版 PDF 也不放在面向读者的机器上。
+- **读者端交互全部保留**：悬浮联动框选（基于同步过去的 `bbox`）、中文/对照/原文切换、跨页、缩放、翻页。本机框选补漏的 `supplement` 块会随下次同步上线。
+- 暂不上 CDN/R2：页面图需要登录才能访问，公共 CDN 会绕过鉴权；按估算的流量，一台香港轻量服务器足够。
+
 ## 0. 准备
 - **服务器**：腾讯云或阿里云的**香港**轻量应用服务器，2 核 2G 或 4G，系统盘 40G 以上，Ubuntu 22.04/24.04，约 ¥30–60/月。放在香港不需要 ICP 备案。
-- **域名**：任意注册商都可以，约 ¥50/年。添加一条 A 记录指向服务器 IP，例如 `mag.example.com`。
+- **域名**：推荐 Cloudflare Registrar / Porkbun / Namecheap（按成本价，不需要国内实名），`.com` 约 $10/年。添加一条 A 记录指向服务器 IP，例如 `mag.example.com`。如果 DNS 托管在 Cloudflare，**代理开关要关掉（灰色云朵，仅 DNS）**：橙色代理会让大陆访问绕路变慢。
 - **防火墙**：只放行 22、80、443。
 
-## 1. 服务器初始化（一次性）
+## 1. 一键初始化（在自己电脑上，只需一次）
+确认 DNS 的 A 记录已经生效（`ping mag.example.com` 能看到服务器 IP），然后：
 ```bash
-sudo apt update && sudo apt install -y python3-venv rsync caddy
-sudo useradd -r -m -d /opt/maglens maglens
-sudo -u maglens git clone <你的仓库> /opt/maglens/app      # 或者用 rsync 把代码传上去
-cd /opt/maglens/app
-sudo -u maglens python3 -m venv .venv
-sudo -u maglens .venv/bin/pip install -r requirements.txt
-sudo mkdir -p /opt/maglens/data /opt/maglens/none && sudo chown -R maglens /opt/maglens
-# 让本机的 ssh 用户也能往 data 写（用于 rsync）：
-sudo chgrp -R "$USER" /opt/maglens/data && sudo chmod -R g+rwX /opt/maglens/data
-
-sudo cp deploy/maglens.service /etc/systemd/system/
-sudo cp deploy/Caddyfile /etc/caddy/Caddyfile      # 先把里面的 mag.example.com 改成你的域名
-sudo systemctl daemon-reload && sudo systemctl enable --now maglens && sudo systemctl reload caddy
+deploy/setup.sh ubuntu@你的服务器IP mag.example.com
 ```
+它会依次完成：安装 python3-venv、rsync、caddy；创建 `maglens` 用户和 `/opt/maglens`；上传代码、建好虚拟环境；
+装好 systemd 服务和 Caddy（自动申请 HTTPS 证书）；**让你设置管理员密码**（默认用户名就是你电脑的用户名，想换就用 `MAGLENS_ADMIN=名字 deploy/setup.sh ...`）；
+最后导出全部已翻完的杂志、上传并启动服务。中途失败了可以直接重跑，做过的步骤会跳过。
 
-## 2. 建账号（在服务器上）
+前提是 ssh 用户能免密 sudo，腾讯云和阿里云的 Ubuntu 镜像默认就可以，脚本开头会先检查。
+服务器上不需要 git，代码由本机直接上传。
+
+> 保险：服务器还没有任何账号时，所有经过 Caddy 进来的请求都会被拒绝（403），不会把管理员权限漏给外人。
+
+## 2. 加朋友的账号（在服务器上）
 ```bash
-cd /opt/maglens/app
-sudo -u maglens .venv/bin/python -m maglens.users --data-dir /opt/maglens/data add 你的名字 --role admin
-sudo -u maglens .venv/bin/python -m maglens.users --data-dir /opt/maglens/data add 朋友A           # 默认是读者
-sudo -u maglens .venv/bin/python -m maglens.users --data-dir /opt/maglens/data list
+ssh -t ubuntu@服务器IP 'cd /opt/maglens/app && sudo -u maglens .venv/bin/python -m maglens.users --data-dir /opt/maglens/data add 朋友A'
 ```
 - 读者：只能看已经翻完的杂志；没有「重译」「框选识别」「术语表」「导出」，也看不到花费和进度。
-- 管理员：功能和本地一样。服务器上没有模型，所以「重译」「框选识别」在服务器上不起作用。
-- 账号保存在 `data/auth.json`，同步时不会被覆盖。改密码用 `passwd`，删账号用 `remove`。
+- 管理员：服务器上没有模型，所以「重译」「框选识别」在线上会自动隐藏。
+- 账号保存在 `data/auth.json`，同步时不会被覆盖。改密码用 `passwd`，删账号用 `remove`，列出账号用 `list`。
+- 登录有防暴力破解：同一个 IP 15 分钟内输错 10 次会被暂时锁住。
 
-## 3. 同步内容（在自己电脑上）
+## 3. 同步内容（在自己电脑上，以后每次新翻了杂志或改了代码）
 ```bash
-deploy/sync.sh ubuntu@你的服务器IP               # 导出全部已完成的杂志，增量上传，重启服务
-deploy/sync.sh ubuntu@你的服务器IP 2026.12       # 只同步新的一期
+deploy/sync.sh ubuntu@你的服务器IP               # 导出全部已翻完的杂志，增量上传图、数据库和代码，重启服务
+deploy/sync.sh ubuntu@你的服务器IP 2026.12       # 只导出新的一期（已上传的其他期不受影响）
 ```
-- 一本约 177 页，三档清晰度的 WebP 合计约 100–150MB；首次同步全部 12 本约 1.5GB。
+- 一本约 177 页，三档清晰度的 WebP 合计约 80–100MB；首次同步全部 12 本约 1GB。
 - 还没翻完的杂志不会被导出。读者端会显示为「即将上线」；如果想直接隐藏，把 `config.toml` 里的 `[reader] show_incomplete` 改成 `false`。
 
 ## 4. 日常
 - 查看日志：`journalctl -u maglens -f`
-- 更新代码：`cd /opt/maglens/app && git pull && sudo systemctl restart maglens`
-- 备份：服务器上只有 `auth.json` 是独有的，其余内容都能从本机重新导出。
+- 更新代码：本机直接 `deploy/sync.sh ubuntu@服务器IP`，代码会随数据一起上传并重启服务
+- 备份：服务器上只有 `auth.json` 是独有的，其余内容都能从本机重新导出。**真正要备份的是本机**：杂志 PDF 和 `~/.maglens/maglens.sqlite3`（花钱翻出来的结果）。放移动硬盘或私有云盘做冷备份，不要放在读者用的服务器上。
 
 ## 成本（每月）
 | 项目 | 费用 |
@@ -66,3 +68,11 @@ deploy/sync.sh ubuntu@你的服务器IP 2026.12       # 只同步新的一期
 ## 注意
 这套部署只适合**自己和少数朋友私下使用**：不开放注册、禁止搜索引擎收录、页面图也需要登录才能访问。
 不要公开传播，也不要拿杂志内容收费。杂志和译文的版权属于出版方。
+
+## 待办
+- [x] **前端预加载后续页面图片（优先做）**：现在 `web/app.js` 只在翻到某一页时才请求这一页的图，线路一般时每次翻页都要等。改成看当前页时，后台用 `new Image()` 预取后面 1–2 页（单页模式按页、跨页模式按跨页；翻页方向跟 `S.rtl` 走），宽度和当前选的 1600/2400 档一致，这样能命中浏览器缓存。不涉及模型，读者端也生效。服务器已经返回 `Cache-Control: max-age=86400`，不用改后端。
+- [ ] 选机房：读者在大陆，选型以大陆的晚高峰实测为准（在 [itdog.cn](https://www.itdog.cn/ping/) 用全国电信/联通/移动节点 ping，例如 `oss-ap-southeast-1.aliyuncs.com`）。从美国测的结果代表不了大陆。候选是腾讯云轻量香港（2 核 2G / 40GB / 20Mbps / 0.5TB，38 元/月），或者阿里云东南亚**通用型**（不要选国际型：线路没有针对大陆优化）。腾讯云 Ubuntu 镜像的默认用户是 `ubuntu`。
+
+### 可选
+- [x] 只读模式（`--manual`）下隐藏「框选识别」「重译」按钮和快捷键 R，免得用管理员登录线上时点了没反应。
+- [ ] 决定是否给读者开放「显示框（B）」：它不用模型，去掉 `index.html` 里按钮的 `admin-only`，再去掉 `app.js` 里 B 快捷键的 `isAdmin()` 判断即可。

@@ -5,11 +5,13 @@ const api = (p, opt) => fetch(p, opt).then(r => {
   if (!r.ok) throw new Error(r.status); return r.json();
 });
 // ---------------------------------------------------------------- user / role
-const ME = { user: null, auth: false };
+const ME = { user: null, auth: false, model: true };
 const isAdmin = () => ME.user?.role === "admin";
-function setUser(user, auth) {
-  ME.user = user; ME.auth = auth;
+const canTranslate = () => isAdmin() && ME.model;  // read-only servers (--manual) have no model
+function setUser(user, auth, model = ME.model) {
+  ME.user = user; ME.auth = auth; ME.model = model !== false;
   document.documentElement.classList.toggle("role-reader", !isAdmin());
+  document.documentElement.classList.toggle("no-model", !ME.model);
   $("#user").innerHTML = auth && user
     ? `<span class="uname">${esc(user.name)}</span><button id="logout" title="退出登录">退出</button>` : "";
   if ($("#logout")) $("#logout").onclick = async () => { await fetch("/api/logout", { method: "POST" }); location.href = "/login.html"; };
@@ -60,7 +62,7 @@ async function showShelf() {
       ${open ? `<img loading="lazy" alt="" src="/api/mag/${m.id}/page/${m.cover || 0}.png?w=360">` : `<div class="ph">即将上线</div>`}
       <div class="t">${esc(issueName(m))}</div>
       <div class="s">${cardLine(m)}</div>
-      ${isAdmin() && m.done < m.pages ? `<div class="prog"><i style="width:${(100 * m.done / m.pages).toFixed(1)}%"></i></div>` : ""}
+      ${isAdmin() && !m.available ? `<div class="prog"><i style="width:${(100 * m.done / m.pages).toFixed(1)}%"></i></div>` : ""}
     </${open ? "a" : "div"}>`;
   }).join("") || `<div class="empty">${isAdmin() ? "目录里没有找到 PDF。" : "还没有可以阅读的杂志。"}</div>`;
 }
@@ -107,6 +109,7 @@ function fitPages(anchor) {
   const ph = Math.max(80, Math.floor(basePageHeight(w, h, pgs.length) * S.zoom));
   const pw = Math.floor(ph * S.mag.aspect);
   const want = pw * (window.devicePixelRatio || 1) > 1700 ? 2400 : 1600;
+  S.imgW = want;  // next render() and the prefetch use the same width -> one download per page
   pgs.forEach(p => {
     p.style.height = ph + "px"; p.style.width = pw + "px";
     const img = p.querySelector("img");
@@ -190,6 +193,19 @@ function go(delta) {
   location.hash = `#/m/${S.mag.id}/${S.order[pos] + 1}`;
 }
 
+// Warm the browser cache with the next 2 pages (2 spreads in spread mode) in reading order, at the
+// width render() will ask for, so turning the page doesn't wait on the network.
+const prefetched = new Set();
+function prefetchAhead(vis) {
+  const pos = posOf(vis[vis.length - 1]);
+  for (const n of S.order.slice(pos + 1, pos + 1 + (S.spread ? 4 : 2))) {
+    const url = `/api/mag/${S.mag.id}/page/${n}.png?w=${S.imgW || 1600}`;
+    if (prefetched.has(url)) continue;
+    prefetched.add(url);
+    new Image().src = url;
+  }
+}
+
 function render() {
   const vis = visiblePages();
   $("#pageinput").value = vis[0] + 1;
@@ -198,13 +214,14 @@ function render() {
   const order = S.rtl ? [...vis].reverse() : vis;
   $("#pages").innerHTML = order.map(n => `
     <div class="pg" data-page="${n}">
-      <img src="/api/mag/${S.mag.id}/page/${n}.png?w=1600" draggable="false">
+      <img src="/api/mag/${S.mag.id}/page/${n}.png?w=${S.imgW || 1600}" draggable="false">
       <div class="ov"></div>
     </div>`).join("");
   $("#pages").classList.toggle("showboxes", S.boxes);
   $("#pages").classList.toggle("selecting", S.selecting);
   document.querySelectorAll(".pg").forEach(bindSelect);
   fitPages();
+  prefetchAhead(vis);
   // thumbs
   document.querySelectorAll("#thumbs img").forEach(t => {
     t.classList.toggle("cur", vis.includes(+t.dataset.page));
@@ -227,7 +244,7 @@ async function loadPage(n) {
     S.data[n] = r.data; drawPanel(n, r); drawBoxes(n); markThumb(n);
   } else if (r.status === "error") {
     sec.innerHTML = head(n) + (isAdmin()
-      ? `<div class="empty err">这一页处理失败：${esc(r.error)}<br><button onclick="retry(${n})">重试</button></div>`
+      ? `<div class="empty err">这一页处理失败：${esc(r.error)}${canTranslate() ? `<br><button onclick="retry(${n})">重试</button>` : ""}</div>`
       : `<div class="empty">这一页暂时没有译文，可以先看左边的原文。</div>`);
   } else if (r.status === "waiting") {
     sec.innerHTML = head(n) + `<div class="empty"><div class="spinner"></div>第 ${n + 1} 页排队中…<br><small>后台批处理翻到这一页后，这里会自动刷新</small></div>`;
@@ -364,7 +381,7 @@ document.addEventListener("keydown", e => {
   else if (e.key === "ArrowRight") go(S.rtl ? -1 : 1);
   else if (e.key === "s") $("#btn-spread").click();
   else if (e.key === "b" && isAdmin()) $("#btn-boxes").click();
-  else if (e.key === "r" && isAdmin()) $("#btn-select").click();
+  else if (e.key === "r" && canTranslate()) $("#btn-select").click();
   else if (e.key === "Escape") setSelecting(false);
   else if (e.key === "+" || e.key === "=") setZoom(S.zoom * 1.25);
   else if (e.key === "-" || e.key === "_") setZoom(S.zoom / 1.25);
@@ -408,7 +425,7 @@ $("#gloss-save").onclick = async () => {
 // ---------------------------------------------------------------- progress + magazine switcher
 const P = { last: null };
 const cardLine = m => `${seriesName(m)} · ` + (isAdmin()
-  ? (m.done < m.pages ? `已翻译 ${m.done}/${m.pages}` : `${m.pages} 页`) + (m.cost ? ` · $${m.cost.toFixed(2)}` : "")
+  ? (!m.available ? `已翻译 ${m.done}/${m.pages}` : `${m.pages} 页`) + (m.cost ? ` · $${m.cost.toFixed(2)}` : "")
   : (m.available ? `${m.pages} 页` : "即将上线"));
 const pct = (a, b) => b ? (100 * a / b) : 0;
 // newest issue first: 'popeye2026.11' / 'POPEYE 2026.08' / '2026年 06月号'; undated (Special) last
@@ -435,7 +452,7 @@ function fillMagSelect() {
   sel.innerHTML = list.map(m => {
     const mm = { ...m, series: m.series || S.mag.series };
     return `<option value="${m.id}" ${m.id === S.mag.id ? "selected" : ""}>` + esc(`${seriesName(mm)} ${issueName(mm)}`) +
-      (isAdmin() && m.done < m.pages ? `（${m.done}/${m.pages}）` : "") + `</option>`;
+      (isAdmin() && !m.available ? `（${m.done}/${m.pages}）` : "") + `</option>`;
   }).join("");
 }
 $("#magsel").onchange = e => { location.hash = `#/m/${e.target.value}`; };
@@ -498,7 +515,7 @@ async function pollProgress() {
 }
 
 (async () => {
-  try { const me = await api("/api/me"); if (me.auth && !me.user) { location.href = "/login.html"; return; } setUser(me.user, me.auth); } catch {}
+  try { const me = await api("/api/me"); if (me.auth && !me.user) { location.href = "/login.html"; return; } setUser(me.user, me.auth, me.model); } catch {}
   route();
   pollProgress();
 })();

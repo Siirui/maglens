@@ -32,7 +32,10 @@ def main():
     print(f"[maglens] 杂志目录: {cfg.library_dir}\n[maglens] 打开 {url}")
     if not a.no_browser:
         threading.Timer(1.2, lambda: webbrowser.open(url)).start()
-    uvicorn.run(app, host=a.host, port=a.port, log_level="warning")
+    # Behind Caddy on the same machine: trust its X-Forwarded-For/-Proto so the app sees the reader's
+    # real IP (login rate limit) and https (Secure session cookie). Nothing else is trusted.
+    uvicorn.run(app, host=a.host, port=a.port, log_level="warning",
+                proxy_headers=True, forwarded_allow_ips="127.0.0.1")
 
 
 if __name__ == "__main__":

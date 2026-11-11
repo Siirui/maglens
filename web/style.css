@@ -191,3 +191,4 @@ dialog small { color: var(--ink3); font-weight: 400; }
 }
 .role-reader .blk .tag { display: none; }
 .role-reader .phead .kind { display: none; }
+.no-model .needs-model { display: none !important; }

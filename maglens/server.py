@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from pathlib import Path
 
 from fastapi import Body, FastAPI, HTTPException, Request
@@ -33,6 +34,7 @@ ADMIN_ONLY = [  # (method, path regex)
     ("GET", r"/api/mag/[^/]+/export\.md"),
 ]
 WIDTHS = (360, 1600, 2400)
+LOGIN_MAX_FAILURES, LOGIN_WINDOW = 10, 15 * 60  # per client IP
 
 
 # Pages a PDF distributor slipped in (Chinese promo / QR-code pages): skipped when reading, and left
@@ -104,13 +106,23 @@ def create_app(cfg: Config, engine=None) -> FastAPI:
 
     @app.get("/api/me")
     def me(request: Request):
-        return {"user": request.state.user, "auth": auth.enabled}
+        # model: can this server translate? (--manual / published deployments can't)
+        return {"user": request.state.user, "auth": auth.enabled,
+                "model": not getattr(engine, "manual", False)}
+
+    failures: dict[str, list[float]] = {}  # client IP -> recent failed login times
 
     @app.post("/api/login")
     def login(request: Request, name: str = Body(...), password: str = Body(...)):
+        ip, now = (request.client.host if request.client else "?"), time.time()
+        recent = [t for t in failures.get(ip, []) if now - t < LOGIN_WINDOW]
+        if len(recent) >= LOGIN_MAX_FAILURES:
+            raise HTTPException(429, "尝试次数太多，请 15 分钟后再试")
         user = auth.check_login(name.strip(), password)
         if not user:
+            failures[ip] = recent + [now]
             raise HTTPException(401, "用户名或密码不对")
+        failures.pop(ip, None)
         resp = JSONResponse({"user": user})
         resp.set_cookie(COOKIE, auth.make_token(user), max_age=SESSION_DAYS * 86400, httponly=True,
                         samesite="lax", secure=request.url.scheme == "https")
