@@ -222,7 +222,8 @@ def test_inserted_promo_pages_are_detected(libdir, tmp_path):
     put(0, "这一页不是 POPEYE 的正文，而是中文推广页（我读网 wodu518.com）", "", "海量高清杂志资源")
     put(1, "Stone Island 品牌广告页（英文原文，并非日文）", "STONE ISLAND", "Stone Island")
     put(2, "店铺介绍：店长推荐的二维码菜单", "店長おすすめのメニューはこちら。QRコードを読み取ってください。" * 3)
-    assert inserted_pages(store, a) == [0]
+    put(3, "这页并非BRUTUS杂志内容，是资料分享的说明", "", "更多杂志请关注")
+    assert inserted_pages(store, a) == [0, 3]
 
 
 def test_no_accounts_refuses_proxied_or_remote_requests(libdir, tmp_path):

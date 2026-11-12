@@ -72,7 +72,7 @@ FEEDBACK_LIST_DEFAULT, FEEDBACK_LIST_MAX = 200, 1000
 # Pages a PDF distributor slipped in (Chinese promo / QR-code pages): skipped when reading, and left
 # out when pairing spreads so left/right pages line up again.
 _KANA = re.compile(r"[\u3040-\u30ff]")
-_PROMO = re.compile(r"我读网|wodu|阿静杂志|资源站|资源库|站长|推广页|非杂志内容|不是 ?POPEYE|并非 ?POPEYE|"
+_PROMO = re.compile(r"我读网|wodu|阿静杂志|资源站|资源库|站长|推广页|非杂志内容|(?:不是|并非) ?(?:POPEYE|BRUTUS)|"
                     r"二维码名片|扫一扫|代找|微信.{0,12}二维码")
 
 
