@@ -75,15 +75,20 @@ async function route() {
 // Where each issue was left off. localStorage is the fast/offline copy (maglens.lastMag,
 // maglens.last.<id> = 0-based page, maglens.at.<id> = when, ISO); when logged in the same is saved to
 // the server (/api/reading) so "继续阅读" follows the account to other devices. Whichever is newer wins;
-// local entries from before timestamps existed count as older than anything on the server. Every
+// local entries from before timestamps existed count as older than anything on the server. Local
+// times are on the server's clock (offset from the HTTP Date header; once saved, the server's own
+// `at`), so a phone whose clock is off doesn't win or lose by mistake. maglens.who.<id> = the account
+// that wrote the entry: on a shared browser, another account's local positions are ignored. Every
 // server call fails soft (offline, 429, ...): we just keep using localStorage.
-const RS = { server: null, timer: 0, pending: null, SAVE_AFTER: 1500 };
+const RS = { server: null, timer: 0, pending: null, skew: 0, SAVE_AFTER: 1500 };
 const syncOn = () => ME.auth && !!ME.user;  // local single-user mode: localStorage only
 const atMs = e => (e && Date.parse(e.at)) || 0;
 const newer = (a, b) => (!a ? b : !b ? a : atMs(b) > atMs(a) ? b : a);
+function noteSkew(r) { const d = Date.parse(r.headers.get("date")); if (d) RS.skew = d - Date.now(); }
 function localPos(id) {
-  const page = store.get("last." + id, null);
-  return Number.isInteger(page) ? { mag_id: id, page, at: store.get("at." + id, "") } : null;
+  const page = store.get("last." + id, null), who = store.get("who." + id, null);
+  if (!Number.isInteger(page) || (syncOn() && who !== null && who !== ME.user.name)) return null;
+  return { mag_id: id, page, at: store.get("at." + id, "") };
 }
 // newest known position in one issue (server or this browser), or null
 function knownPos(id) {
@@ -94,6 +99,7 @@ async function loadServerPos() {
   if (!syncOn()) return null;
   try {
     const r = await fetch("/api/reading", { cache: "no-store" });
+    noteSkew(r);
     if (r.ok) RS.server = await r.json();
   } catch {}
   return RS.server;
@@ -103,8 +109,10 @@ async function resumePage(id) {
   return knownPos(id)?.page ?? 0;
 }
 function rememberPos(id, page) {
-  store.set("lastMag", id); store.set("last." + id, page); store.set("at." + id, new Date().toISOString());
+  store.set("lastMag", id); store.set("last." + id, page);
+  store.set("at." + id, new Date(Date.now() + RS.skew).toISOString());
   if (!syncOn()) return;
+  store.set("who." + id, ME.user.name);
   if (RS.pending && RS.pending.mag_id !== id) flushPos();  // switched issues: keep where the last one stopped
   RS.pending = { mag_id: id, page };
   clearTimeout(RS.timer);
@@ -117,8 +125,15 @@ function flushPos(keepalive = false) {
   RS.pending = null;
   fetch("/api/reading", { method: "PUT", headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body), keepalive })
-    .then(r => r.ok ? r.json() : null)
-    .then(j => { if (j && RS.server) RS.server.pages[body.mag_id] = { page: body.page, at: j.at }; })
+    .then(r => { noteSkew(r); return r.ok ? r.json() : null; })
+    .then(j => {
+      if (!j) return;
+      if (store.get("last." + body.mag_id) === body.page) store.set("at." + body.mag_id, j.at);  // one clock
+      if (RS.server) {
+        RS.server.pages[body.mag_id] = { page: body.page, at: j.at };
+        RS.server.last = { mag_id: body.mag_id, page: body.page, at: j.at };
+      }
+    })
     .catch(() => {});
 }
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") flushPos(true); });
@@ -148,7 +163,9 @@ async function showShelf() {
   const last = cand && openable(cand.mag_id);
   $("#continue").innerHTML = last ? (() => {
     const p = (knownPos(last.id)?.page ?? 0) + 1;
-    return `<a class="cont" href="#/m/${last.id}/${p}">
+    // no page in the link: route() resolves the newest position when it is clicked, so a shelf left
+    // open for hours doesn't send the reader back (and save that old page over a newer one)
+    return `<a class="cont" href="#/m/${last.id}">
       <span class="sticker" aria-hidden="true">つづき！</span>
       <img alt="" src="/api/mag/${last.id}/page/${last.cover || 0}.png?w=360">
       <span class="info">

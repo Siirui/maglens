@@ -293,7 +293,10 @@ def create_app(cfg: Config, engine=None) -> FastAPI:
         if name == me_name:
             raise HTTPException(400, "不能删除自己正在使用的账号")
         auth.remove_user(name)
-        reading.forget(name)  # a new account with the same name must not inherit this one's position
+        try:  # a new account with the same name must not inherit this one's position
+            reading.forget(name)
+        except OSError as e:
+            print(f"reading.json: could not forget {name}: {e}", file=sys.stderr)
         return account_list()
 
     # ------------------------------------------------------------------ library
@@ -488,8 +491,12 @@ def create_app(cfg: Config, engine=None) -> FastAPI:
         # issue taken down, is left out
         mags = {m["id"]: m for m in store.magazines()
                 if is_admin(request) or (available(m) and can_see(request, m["id"]))}
-        pages = {k: e for k, e in reading.get(request.state.user["name"]).items()  # newest first
-                 if k in mags and e["page"] < mags[k]["pages"]}
+        try:  # best effort, like the access log: the frontend falls back to localStorage
+            saved = reading.get(request.state.user["name"])  # newest first
+        except OSError as e:
+            print(f"reading.json read failed: {e}", file=sys.stderr)
+            saved = {}
+        pages = {k: e for k, e in saved.items() if k in mags and e["page"] < mags[k]["pages"]}
         last = next(({"mag_id": k, **v} for k, v in pages.items()), None)
         return {"last": last, "pages": pages}
 
@@ -505,7 +512,11 @@ def create_app(cfg: Config, engine=None) -> FastAPI:
         if not isinstance(page, int) or isinstance(page, bool) or not 0 <= page < m["pages"]:
             raise HTTPException(400, "页码不对")
         now = guard.utc_now(ms=True)
-        reading.put(request.state.user["name"], mag_id, page, now)
+        try:
+            reading.put(request.state.user["name"], mag_id, page, now)
+        except OSError as e:
+            print(f"reading.json write failed: {e}", file=sys.stderr)
+            raise HTTPException(503, "暂时保存不了阅读进度")
         return {"ok": True, "at": now}
 
     # ------------------------------------------------------------------ access log (admin only)

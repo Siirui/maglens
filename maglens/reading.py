@@ -8,11 +8,14 @@ overwrites it, backup.sh copies it):
 
 `page` is 0-based like everywhere else in the API; `at` is server time (UTC). "pages" is in write
 order (oldest first) and each account keeps its MAX_MAGS most recently written issues. The file is
-re-read on every call (it is small) and replaced atomically under a lock, so request threads - and
-the `maglens.users` CLI removing an account - never leave it half-written.
+re-read on every call (it is small) and replaced atomically while holding a thread lock plus an
+flock on reading.json.lock, so request threads and the `maglens.users` CLI (removing an account)
+neither leave it half-written nor lose each other's updates.
 """
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import json
 import os
 import sys
@@ -27,6 +30,13 @@ class ReadingState:
     def __init__(self, path: Path, max_mags: int = MAX_MAGS):
         self.path, self.max_mags = path, max_mags
         self.lock = threading.Lock()
+
+    @contextlib.contextmanager
+    def _locked(self):
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with self.lock, open(self.path.with_name(self.path.name + ".lock"), "a") as f:
+            fcntl.flock(f, fcntl.LOCK_EX)  # other processes too; released when the file is closed
+            yield
 
     def _load(self) -> dict:
         try:
@@ -43,7 +53,6 @@ class ReadingState:
         return data if isinstance(data, dict) else {}
 
     def _save(self, data: dict):
-        self.path.parent.mkdir(parents=True, exist_ok=True)
         fd, tmp = tempfile.mkstemp(prefix=self.path.name + ".", suffix=".tmp", dir=self.path.parent)
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
@@ -67,12 +76,12 @@ class ReadingState:
 
     def get(self, user: str) -> dict[str, dict]:
         """{mag_id: {"page", "at"}} for one account, newest first."""
-        with self.lock:
+        with self._locked():
             pages = self._pages(self._load().get(user))
         return dict(reversed(pages.items()))
 
     def put(self, user: str, mag_id: str, page: int, at: str):
-        with self.lock:
+        with self._locked():
             data = self._load()
             pages = self._pages(data.get(user))
             pages.pop(mag_id, None)
@@ -83,7 +92,7 @@ class ReadingState:
 
     def forget(self, user: str):
         """Drop a removed account's positions, so a new account with the same name starts fresh."""
-        with self.lock:
+        with self._locked():
             data = self._load()
             if data.pop(user, None) is not None:
                 self._save(data)

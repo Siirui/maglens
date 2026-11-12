@@ -835,7 +835,7 @@ def test_reading_concurrent_puts_keep_the_file_whole(libdir, tmp_path):
     assert set(data) == {f"r{i}" for i in range(4)}                  # no account's write was lost
     for c in clients:
         assert c.get("/api/reading").json()["last"]["mag_id"] == jan
-    assert not list(tmp_path.glob("reading.json.*"))            # no temp files left behind
+    assert not list(tmp_path.glob("reading.json.*.tmp"))        # no temp files left behind
 
 
 def test_reading_rate_limit(libdir, tmp_path):
@@ -855,3 +855,17 @@ def test_reading_rate_limit(libdir, tmp_path):
     clock.t += 61
     assert amy.put("/api/reading", json={"mag_id": jan, "page": 1}).status_code == 200
     assert guard.RULES["reading"] == [(60, 60)]
+
+
+def test_reading_file_errors_fail_soft(libdir, tmp_path, monkeypatch):
+    from maglens.reading import ReadingState
+    app, store = make_app(libdir, tmp_path, users=[("boss", "admin"), ("amy", "reader")])
+    jan, _ = ids(store)
+    amy = TestClient(app)
+    login(amy, "amy")
+
+    def broken(*a, **k):
+        raise PermissionError("nope")
+    monkeypatch.setattr(ReadingState, "_load", broken)
+    assert amy.get("/api/reading").json() == {"last": None, "pages": {}}
+    assert amy.put("/api/reading", json={"mag_id": jan, "page": 0}).status_code == 503
