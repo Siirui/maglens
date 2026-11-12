@@ -416,8 +416,14 @@ def test_feedback(libdir, tmp_path):
 
     # a broken line (e.g. hand-edited) is skipped, not fatal
     with (tmp_path / "feedback.jsonl").open("a", encoding="utf-8") as f:
-        f.write('{"user": "x", "te\n')
+        f.write('{"user": "x", "te\n{"user": "cut short')       # second one has no newline
     assert len(admin.get("/api/feedback").json()["feedback"]) == 5
+    assert post(amy, text="接着写").status_code == 200           # not glued onto the cut-short line
+    assert admin.get("/api/feedback").json()["feedback"][0]["text"] == "接着写"
+
+    # unusual line separators inside a text don't split the stored entry
+    assert post(amy, text="一 二\u0085三\r四").status_code == 200
+    assert admin.get("/api/feedback").json()["feedback"][0]["text"] == "一 二\u0085三\r四"
 
 
 def test_feedback_rate_limit(libdir, tmp_path):
@@ -432,7 +438,11 @@ def test_feedback_rate_limit(libdir, tmp_path):
     r = amy.post("/api/feedback", json=body)
     assert r.status_code == 429 and "频繁" in r.json()["detail"]
     assert bob.post("/api/feedback", json=body).status_code == 200            # per user, not global
-    assert len((tmp_path / "feedback.jsonl").read_text(encoding="utf-8").splitlines()) == 21
+    # the shared trial account: another visitor (other IP) on the same account isn't blocked
+    amy2 = TestClient(app, client=("198.51.100.7", 5000))
+    login(amy2, "amy")
+    assert amy2.post("/api/feedback", json=body).status_code == 200
+    assert len((tmp_path / "feedback.jsonl").read_text(encoding="utf-8").splitlines()) == 22
 
 
 def test_feedback_without_accounts_is_local_admin(libdir, tmp_path):

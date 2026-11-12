@@ -387,7 +387,9 @@ def create_app(cfg: Config, engine=None) -> FastAPI:
     # never uploads or overwrites it), like auth.json.
     feedback_file = cfg.data_dir / "feedback.jsonl"
     feedback_lock = threading.Lock()  # sync handlers run in a thread pool
-    feedback_posts: dict[str, list[float]] = {}  # user name -> recent post times
+    # (user name, client IP) -> recent post times (monotonic). Keyed by IP too because the public
+    # trial account is shared: one visitor hitting the limit must not silence everyone else on it.
+    feedback_posts: dict[tuple[str, str], list[float]] = {}
 
     @app.post("/api/feedback")
     def feedback_add(request: Request, mag_id: Any = Body(None), page: Any = Body(None),
@@ -402,18 +404,24 @@ def create_app(cfg: Config, engine=None) -> FastAPI:
             raise HTTPException(400, "请写下你的意见")
         if len(text) > FEEDBACK_MAX_CHARS:
             raise HTTPException(400, f"最多 {FEEDBACK_MAX_CHARS} 字")
-        name, now = request.state.user["name"], time.time()
+        name, now = request.state.user["name"], time.monotonic()
+        key = (name, request.client.host if request.client else "?")
         entry = {"time": datetime.now(timezone.utc).isoformat(timespec="seconds"), "user": name,
                  "mag_id": mag_id, "title": m["title"], "page": page, "text": text}
         with feedback_lock:
-            recent = [t for t in feedback_posts.get(name, []) if now - t < FEEDBACK_WINDOW]
+            recent = [t for t in feedback_posts.get(key, []) if now - t < FEEDBACK_WINDOW]
             if len(recent) >= FEEDBACK_MAX_POSTS:
-                feedback_posts[name] = recent
+                feedback_posts[key] = recent
                 raise HTTPException(429, "反馈太频繁了，请过一会儿再发")
             feedback_file.parent.mkdir(parents=True, exist_ok=True)
-            with feedback_file.open("a", encoding="utf-8") as f:
-                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
-            feedback_posts[name] = recent + [now]
+            line = json.dumps(entry, ensure_ascii=False) + "\n"
+            with feedback_file.open("ab+") as f:
+                if f.tell():  # a write cut short earlier must not swallow this entry too
+                    f.seek(-1, 2)
+                    if f.read(1) != b"\n":
+                        line = "\n" + line
+                f.write(line.encode("utf-8"))
+            feedback_posts[key] = recent + [now]
         return {"ok": True}
 
     @app.get("/api/feedback")
@@ -421,7 +429,9 @@ def create_app(cfg: Config, engine=None) -> FastAPI:
         limit = max(1, min(limit, FEEDBACK_LIST_MAX))
         with feedback_lock:
             try:
-                lines = feedback_file.read_text(encoding="utf-8").splitlines()
+                # split on \n only: splitlines() would also break on U+2028 / U+0085 inside a text,
+                # which json.dumps(ensure_ascii=False) leaves unescaped
+                lines = feedback_file.read_text(encoding="utf-8").split("\n")
             except FileNotFoundError:
                 lines = []
         out = []
