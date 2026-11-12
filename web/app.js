@@ -58,7 +58,8 @@ const KIND_LABEL = { article: "文章", feature_opener: "专题开篇", toc: "�
 
 const S = {
   mag: null, page: 0, mode: store.get("mode", "bi"), spread: store.get("spread", false),
-  rtl: store.get("rtl", false),  // page-turn direction; default is how Chinese books turn (next = →) boxes: false, selecting: false, data: {}, polls: {},
+  rtl: store.get("rtl", false),  // page-turn direction; default is how Chinese books turn (next = →)
+  boxes: false, selecting: false, data: {}, polls: {},
   fit: store.get("fit", "page"), zoom: store.get("zoom", 1),
   tap: store.get("tap", "sheet"),  // phones: "sheet" (tap a passage -> the sheet scrolls to it) or "bubble"
 };
