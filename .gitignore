@@ -6,3 +6,4 @@ __pycache__/
 .venv/
 docs/PRIVATE.md
 .claude/
+docs/ROADMAP.md

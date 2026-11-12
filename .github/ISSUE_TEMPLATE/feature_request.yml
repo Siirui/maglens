@@ -1,0 +1,19 @@
+name: Feature request / 功能建议
+description: An idea that would make MagLens better / 让 MagLens 更好用的想法
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do? / 你想做什么？
+      description: Describe the problem before the solution. / 先说遇到的问题，再说想要的做法。
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: Your idea / 你的想法
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Anything you tried instead? / 现在是怎么绕过去的？

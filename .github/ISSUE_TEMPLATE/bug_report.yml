@@ -1,0 +1,36 @@
+name: Bug report / 问题报告
+description: Something in the code doesn't work as expected / 代码里有地方不对
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! This tracker is for the MagLens **code**. If you are a reader of a MagLens site and a translation looks wrong, please use the feedback link at the end of the translation panel instead.
+
+        感谢反馈！这里只接收 MagLens **代码**的问题。如果你是在某个 MagLens 网站上阅读时觉得译文有问题，请用译文末尾的「告诉我」反馈。
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened? / 发生了什么？
+      description: What did you expect, and what happened instead? / 你期望的结果和实际结果
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce / 复现步骤
+      placeholder: |
+        1. python run.py --mock --dir ...
+        2. ...
+    validations:
+      required: true
+  - type: input
+    id: env
+    attributes:
+      label: Environment / 环境
+      placeholder: "macOS 15, Python 3.12, Safari on iPhone"
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or screenshots / 日志或截图
+      description: Please remove any magazine scans, account names and server addresses. / 请去掉杂志页面、账号名和服务器地址。

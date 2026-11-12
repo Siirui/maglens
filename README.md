@@ -1,58 +1,77 @@
-# MagLens — 本地日文杂志阅读 + 翻译
+**English** · [简体中文](README.zh-CN.md)
 
-左边看杂志页面，右边看中文译文。用 Claude 视觉模型识别整页图片，再拿 PDF 文字层交叉核对、补上漏掉的部分，翻译成大陆生活方式杂志的中文风格。
+# MagLens
 
-![对照模式](docs/screenshots/3_page2_bilingual_hover.png)
+A reader for Japanese magazines with a Chinese translation beside every page. Each page is read by a Claude vision model, cross-checked against the PDF's text layer to catch anything it missed, and translated into the voice of a Chinese lifestyle magazine. The magazine stays the main thing on screen; the translation is there when you need it.
 
-## 在 Mac 上运行（Python ≥ 3.11）
+## What it does
+
+- **Original and translation side by side.** Hover or tap a passage on the page to highlight its translation, and the other way round. Switch between Chinese, bilingual and Japanese only.
+- **Reads like a magazine.** Right-to-left binding, two-page spreads, fit modes, zoom, swipe to turn pages, and the next pages preloaded.
+- **Phones.** In portrait the page fills the screen and the translation sits in a bottom sheet with three heights. An optional tap mode shows a passage's translation in a bubble right on the page.
+- **Batch translation that resumes.** Translate a whole issue in the background; interrupted runs pick up where they stopped, and pages that are already done are never paid for twice.
+- **A glossary per series**, so names of shops, brands and people stay consistent from issue to issue.
+- **Small private deployments.** Accounts with reader and admin roles, per-account access to chosen issues, and in-app feedback from readers. The server only serves pre-rendered images and finished translations: no PDFs, and it never calls a model.
+
+## Run it on a Mac (Python ≥ 3.11)
+
 ```bash
 git clone https://github.com/Siirui/maglens.git && cd maglens
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 ```
-杂志目录在 `config.toml` 的 `[library] dir` 里设置（默认 `~/Magazines/2026`），也可以用 `--dir` 临时指定。
-目录里如果有整本扫描成 JPG 的文件夹，会自动转成 PDF，放在 `~/.maglens/converted/`，原文件夹不会改动。
 
-翻译有两种方式，结果都保存在 `~/.maglens`，不会重复花钱：
+Point `[library] dir` in `config.toml` at your folder of magazine PDFs (or pass `--dir`). Folders of JPG scans are converted to PDF in `~/.maglens/converted/`; the originals are left alone.
 
-**A. 边看边翻（需要 Console API key）**
+Translations are stored in `~/.maglens` and reused. There are two ways to produce them:
+
+**A. Translate as you read (needs an Anthropic API key)**
 ```bash
-export ANTHROPIC_API_KEY=sk-ant-api...
+export ANTHROPIC_API_KEY=sk-ant-...
 python run.py
 ```
-浏览器会自动打开 http://127.0.0.1:8765 。打开哪一页就翻译哪一页，同时预取后面 2 页。
+Your browser opens http://127.0.0.1:8765. The page you open is translated first, and the next two are prefetched.
 
-**B. 整本批量翻（不需要 API key，走 Claude 订阅）**
+**B. Translate whole issues in the background (uses Claude Code, no API key)**
 ```bash
-python -m maglens.cli_runner --series popeye --model haiku     # 从最新一期往前，一本一本翻
-python run.py --manual                                          # 另开一个终端：只读模式看结果
+python -m maglens.cli_runner --series popeye --model haiku   # newest issue first, one issue at a time
+python run.py --manual                                        # in another terminal: read-only viewer
 ```
-它通过 Claude Code 的 `claude -p` 逐页调用，算在你的订阅用量里，额度用完后从 usage credits 扣。
-用 Haiku 时每页约 $0.01（按标价折算），一本约 1 小时。顶部有进度条，跑完的页面会自动出现。
-中途中断（合盖、断网）也没关系，重跑同一条命令会跳过已经完成的页。
+This calls `claude -p` page by page, so it counts against your Claude plan. With Haiku a page costs about $0.01 at list price and an issue takes about an hour. Running the same command again skips finished pages.
 
-没设 key 且没加 `--manual` 时会进入模拟模式，只显示 PDF 文字层，用来检查界面是否正常。
+Without a key and without `--manual`, MagLens runs in mock mode and only shows the PDF's text layer, which is handy for working on the interface.
 
-## 常用设置（config.toml / 命令行）
-- `--model claude-sonnet-5-5` 或 `claude-haiku-5-5`：更便宜；默认 `claude-opus-5-5` 效果最好
-- `--effort low|medium|high`：识别的细致程度
-- `show_cny`：价格后面附上约合人民币
+## Settings
 
-## 快捷键
-←/→ 翻页（默认右翻，跟日本杂志一样）· S 跨页 · 1/2/3/4 整页/适应宽度/适应高度/铺满 · +/−/0 缩放（也可以用 ⌘+滚轮或双指捏合）· B 显示文本框 · R 框选识别 · Esc 取消框选
+In `config.toml` or on the command line:
+- `--model` picks the model; `--effort low|medium|high` trades detail for cost.
+- `show_cny` adds an approximate RMB amount after Japanese prices.
 
-## 账号与部署（自用 / 朋友圈）
+## Keyboard
+
+←/→ turn pages (right-to-left by default, like Japanese magazines) · S spread · 1/2/3/4 page / width / height / fill · +/−/0 zoom (also ⌘ + scroll or pinch) · B show text boxes · R select a region to re-read · Esc cancel
+
+## Accounts and deployment
+
 ```bash
-python -m maglens.users add 你的名字 --role admin   # 有账号后就需要登录；没有账号时本机所有人都是管理员
-python -m maglens.users add 朋友A                    # 读者：只能看已经翻完的杂志，看不到管理按钮和花费
-python -m maglens.publish --out dist                 # 导出预渲染页面 + 精简数据库（不含 PDF）
+python -m maglens.users add yourname --role admin    # once there is an account, everyone has to log in
+python -m maglens.users add friend                   # readers only see finished issues, no admin tools or costs
+python -m maglens.users scope friend <issue id>      # limit a reader to some issues (ids: users list)
+python -m maglens.publish --out dist                 # pre-rendered pages + a slim database, no PDFs
 ```
-部署到云服务器的完整步骤（香港轻量服务器 + Caddy HTTPS + `deploy/sync.sh` 同步）见 [docs/DEPLOY.md](docs/DEPLOY.md)。
-只适合私下使用：不开放注册、禁止搜索引擎收录。杂志和译文的版权属于出版方，请勿公开传播或收费。
 
-## 开发
+[docs/DEPLOY.md](docs/DEPLOY.md) walks through a full setup on a small cloud server with Caddy and HTTPS (written in Chinese).
+
+## Copyright
+
+This repository contains code only, no magazine content. Magazines and their translations belong to their publishers. MagLens is meant for reading your own copies privately: keep deployments behind a login, don't open them to the public, and don't charge for access. Search engines are told not to index MagLens sites.
+
+## Contributing
+
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest tests            # 用回放的模型响应和假的 claude 命令跑测试，不需要 key
-python tests/make_sample.py x.pdf # 生成 3 页测试杂志
+python -m pytest tests            # replays recorded model responses and a fake claude command; no key needed
+python tests/make_sample.py x.pdf # builds a 3-page sample magazine (made-up text, not a real issue)
 ```
+
+Found a bug in the code or have an idea? [Open an issue](https://github.com/Siirui/maglens/issues/new/choose). If you're reading on a MagLens site and a translation looks wrong, use the feedback link at the end of the translation panel instead.
