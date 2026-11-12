@@ -159,6 +159,12 @@ def test_publish_and_serve_without_pdfs(libdir, tmp_path):
     assert r.status_code == 200 and r.headers["content-type"] == "image/webp"
     assert c.get(f"/api/mag/{done}/page/1").json()["data"]["blocks"][0]["zh"] == "测"
 
+    # the account CLI on the server (no PDFs) can still limit a reader to a published issue
+    from maglens import users
+    Auth(out / "auth.json").set_user("trial", "pw-trial", "reader")
+    users.main(["--data-dir", str(out), "scope", "trial", done])
+    assert Auth(out / "auth.json").users["trial"]["mags"] == [done]
+
 
 def test_inserted_promo_pages_are_detected(libdir, tmp_path):
     from maglens.server import inserted_pages
@@ -296,9 +302,55 @@ def test_reader_limited_to_some_issues(libdir, tmp_path):
     assert users(admin.post("/api/users/trial/password", json={"password": "trial-pw-2"}))["trial"] == [feb]
     assert users(admin.post("/api/users/trial/mags", json={"mags": None}))["trial"] is None
 
+    # logged out: nothing
+    anon = TestClient(app)
+    assert anon.post("/api/users/trial/mags", json={"mags": [jan]}).status_code == 401
+    assert anon.post("/api/users", json={"name": "z", "password": "secret-123", "mags": [jan]}).status_code == 401
+
     # creating a limited account directly
     r = admin.post("/api/users", json={"name": "xhs", "password": "secret-123", "mags": [jan]})
     assert r.status_code == 200 and users(r)["xhs"] == [jan]
     xhs = TestClient(app)
     assert xhs.post("/api/login", json={"name": "xhs", "password": "secret-123"}).status_code == 200
     assert shelf(xhs) == {jan}
+
+
+def test_scope_only_finished_issues_and_cli_keeps_it(libdir, tmp_path, monkeypatch):
+    app, store = make_app(libdir, tmp_path, users=[("boss", "admin"), ("trial", "reader")])  # only 1月 finished
+    jan, feb = ids(store)
+    admin = TestClient(app)
+    login(admin, "boss")
+    assert {m["id"] for m in admin.get("/api/users").json()["magazines"]} == {jan}
+    assert admin.post("/api/users/trial/mags", json={"mags": [feb]}).status_code == 400   # unfinished
+    assert admin.post("/api/users/trial/mags", json={"mags": [jan]}).status_code == 200
+
+    from maglens import users
+    monkeypatch.setattr(users, "_ask_password", lambda: "new-trial-pw")
+    users.main(["--data-dir", str(tmp_path), "add", "trial"])                            # re-add = new password
+    assert Auth(tmp_path / "auth.json").users["trial"]["mags"] == [jan]
+    with pytest.raises(SystemExit):
+        users.main(["--data-dir", str(tmp_path), "scope", "trial", "typo"])
+    with pytest.raises(SystemExit):
+        users.main(["--data-dir", str(tmp_path), "scope", "boss", jan])
+
+
+def test_broken_or_missing_auth_file_fails_closed(libdir, tmp_path):
+    app, _ = make_app(libdir, tmp_path, users=[("boss", "admin"), ("amy", "reader")])
+    c = TestClient(app)
+    login(c, "amy")
+    f = tmp_path / "auth.json"
+    good = f.read_text()
+    f.write_text(good[:-5])                                    # hand-edit gone wrong
+    assert c.get("/api/library").status_code == 200            # still works, old accounts kept
+    assert TestClient(app).get("/api/library").status_code == 401
+    boss = TestClient(app)
+    login(boss, "boss")
+    assert boss.get("/api/users").status_code == 503           # account edits refuse to overwrite it
+    f.write_text(good.replace('"role": "reader"', '"role": "root"'))   # parses, but bad entry
+    assert c.get("/api/library").status_code == 200
+    f.unlink()                                                 # file gone: login stays on
+    assert TestClient(app).get("/api/library").status_code == 401
+    assert boss.post("/api/users", json={"name": "x", "password": "secret-123"}).status_code == 503
+    assert not f.exists()                                      # nothing written over the gap
+    f.write_text(good)
+    assert boss.get("/api/users").status_code == 200

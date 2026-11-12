@@ -83,6 +83,7 @@ def create_app(cfg: Config, engine=None) -> FastAPI:
     @app.middleware("http")
     async def session(request: Request, call_next):
         path = request.url.path
+        auth.refresh()  # accounts edited from the CLI apply at once, including the very first one
         if not auth.enabled:
             # No accounts yet: only direct local access is trusted. Anything coming through a reverse
             # proxy (Caddy adds X-Forwarded-For) or from another machine is refused, so a server
@@ -150,18 +151,19 @@ def create_app(cfg: Config, engine=None) -> FastAPI:
     def accounts(request: Request) -> str:
         if not auth.enabled:
             raise HTTPException(409, "本机没有启用账号，账号管理只在服务器上使用")
-        auth.reload()
+        if not auth.refresh():  # never save over an auth.json we couldn't read
+            raise HTTPException(503, "账号文件 auth.json 读取失败，请先在服务器上检查")
         return request.state.user["name"]
 
     def account_list():
         return {"users": [Auth.public(u) for u in auth.users.values()],
                 "magazines": [{"id": m["id"], "title": m["title"], "series": m["series"]}
-                              for m in store.magazines()]}
+                              for m in store.magazines() if available(m)]}
 
     def check_mags(mags: list[str] | None, role: str) -> list[str] | None:
         if mags is None or role == "admin":
             return None
-        known = {m["id"] for m in store.magazines()}
+        known = {m["id"] for m in store.magazines() if available(m)}  # readers can't open the rest
         if not mags or not all(isinstance(x, str) and x in known for x in mags):
             raise HTTPException(400, "请选择要开放的杂志")
         return sorted(set(mags))

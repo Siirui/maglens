@@ -490,9 +490,10 @@ async function openUsers() {
 function setUsers(j) { U.list = j.users; U.mags = (j.magazines || []).slice().sort(byIssue); }
 // what a reader may open: "" = every issue, else one issue id (several ids only come from the CLI)
 function scopeOptions(mags) {
-  const v = mags == null ? "" : mags.length === 1 ? mags[0] : "multi";
   const opts = [["", "全部杂志"], ...U.mags.map(m => [m.id, `仅 ${seriesName(m)} ${issueName(m)}`])];
-  if (v === "multi") opts.push(["multi", `${mags.length} 期`]);
+  let v = mags == null ? "" : mags.length === 1 ? mags[0] : "multi";
+  if (v !== "" && !opts.some(o => o[0] === v)) v = "multi";  // several issues, or one not on the shelf
+  if (v === "multi") opts.push(["multi", mags.length ? `已限定 ${mags.length} 期` : "已限定（无可看）"]);
   return opts.map(([k, t]) => `<option value="${esc(k)}" ${k === v ? "selected" : ""}>${esc(t)}</option>`).join("");
 }
 function fillScope(sel, mags) { sel.innerHTML = scopeOptions(mags); }

@@ -57,32 +57,56 @@ class Auth:
         self.path = path
         self.secret = b""
         self.users: dict[str, dict] = {}
-        self._mtime: int | None = None
+        self._mtime: tuple | None = None
+        self.ok = True  # False while auth.json is missing/unreadable but accounts are still loaded
         self.reload()
 
     @property
     def enabled(self) -> bool:
         return bool(self.users)
 
-    def _stat(self) -> int | None:
+    def _stat(self) -> tuple | None:
         try:
-            return self.path.stat().st_mtime_ns
+            st = self.path.stat()
         except FileNotFoundError:
             return None
+        return st.st_ino, st.st_mtime_ns, st.st_size  # save() replaces the file, so the inode changes too
 
-    def refresh(self):
-        """Pick up edits made by another process (e.g. `maglens.users` on the server); one stat() call."""
-        if self._stat() != self._mtime:
+    def refresh(self) -> bool:
+        """Pick up edits made by another process (e.g. `maglens.users` on the server); one stat() call.
+
+        Fails closed: if auth.json is missing (while accounts are loaded), unreadable or malformed, the
+        accounts already in memory stay in force instead of turning login off or taking the site down.
+        Returns False in that state, so account edits can refuse to overwrite a file they can't read.
+        To revoke every account, use `maglens.users remove` or restart the service."""
+        try:
+            st = self._stat()
+        except OSError:
+            self.ok = False
+            return False
+        if st == self._mtime:
+            return self.ok
+        if st is None and self.users:
+            self.ok = False
+            return False
+        try:
             self.reload()
+        except (ValueError, KeyError, TypeError, OSError):
+            self._mtime, self.ok = st, False  # don't re-parse the same broken file on every request
+        return self.ok
 
     def reload(self):
+        """Read auth.json; on error raise and leave the loaded accounts untouched."""
         mtime = self._stat()
         if mtime is None:
-            self.secret, self.users = b"", {}
+            secret, users = b"", {}
         else:
             raw = json.loads(self.path.read_text(encoding="utf-8"))
-            self.secret = bytes.fromhex(raw["secret"])
-            self.users = {u["name"]: u for u in raw.get("users", [])}
+            secret = bytes.fromhex(raw["secret"])
+            users = {u["name"]: u for u in raw.get("users", [])}
+            if not all(isinstance(u.get("hash"), str) and u.get("role") in ROLES for u in users.values()):
+                raise ValueError("malformed user entry")
+        self.secret, self.users, self.ok = secret, users, True
         self._mtime = mtime  # last, so a concurrent refresh() never skips a reload it still needs
 
     def save(self):
@@ -148,7 +172,6 @@ class Auth:
 
     def read_token(self, token: str | None) -> dict | None:
         """Valid, unexpired token for a user that still exists -> {name, role[, mags]} (read fresh)."""
-        self.refresh()
         if not token or "." not in token or not self.secret:
             return None
         body, sig = token.rsplit(".", 1)
