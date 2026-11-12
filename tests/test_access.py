@@ -365,3 +365,80 @@ def test_broken_or_missing_auth_file_fails_closed(libdir, tmp_path):
     assert c.get("/api/library").status_code == 200 and boss.get("/api/users").status_code == 503
     with pytest.raises(ValueError, match="格式有误"):          # a fresh start says what is wrong
         Auth(f)
+
+
+def test_feedback(libdir, tmp_path):
+    """Any logged-in user can leave feedback on a page they can see; only admins can read it."""
+    app, store = make_app(libdir, tmp_path, users=[("boss", "admin"), ("amy", "reader"), ("trial", "reader")])
+    jan, feb = ids(store)                                      # only 1月 is finished
+    Auth(tmp_path / "auth.json").set_mags("trial", [jan])
+    admin, amy, trial, anon = TestClient(app), TestClient(app), TestClient(app), TestClient(app)
+    for c, n in ((admin, "boss"), (amy, "amy"), (trial, "trial")):
+        login(c, n)
+    post = lambda c, **kw: c.post("/api/feedback", json={"mag_id": jan, "page": 1, "text": "译错了", **kw})
+
+    # logged out: nothing
+    assert post(anon).status_code == 401
+    assert anon.get("/api/feedback").status_code == 401
+
+    assert post(amy, text="  第二段漏译了  ").status_code == 200
+    assert post(admin, page=0).status_code == 200
+    assert post(trial, page=2).status_code == 200
+
+    # readers can't list anyone's feedback, including their own
+    assert amy.get("/api/feedback").status_code == 403
+    assert trial.get("/api/feedback").status_code == 403
+
+    # hidden or unfinished issues look like they don't exist; the admin can post about any issue
+    assert post(trial, mag_id=feb).status_code == 404          # outside the trial account's scope
+    assert post(amy, mag_id=feb).status_code == 404            # not finished yet
+    assert post(amy, mag_id="nope").status_code == 404
+    assert post(admin, mag_id=feb).status_code == 200
+
+    # validation
+    for kw in ({"text": ""}, {"text": "   \n "}, {"text": "字" * 1001}, {"text": 5},
+               {"page": -1}, {"page": 3}, {"page": "1"}, {"page": 1.5}, {"page": True}, {"page": None},
+               {"mag_id": None}, {"mag_id": ""}):
+        assert post(amy, **kw).status_code == 400, kw
+    assert post(amy, text="字" * 1000).status_code == 200
+
+    # admin listing: newest first, with who/where/what
+    r = admin.get("/api/feedback")
+    assert r.status_code == 200
+    fb = r.json()["feedback"]
+    assert [(f["user"], f["mag_id"], f["page"]) for f in fb] == [
+        ("amy", jan, 1), ("boss", feb, 1), ("trial", jan, 2), ("boss", jan, 0), ("amy", jan, 1)]
+    assert fb[-1]["text"] == "第二段漏译了" and fb[-1]["title"] == "SAMPLE 2026年1月号"
+    assert fb[-1]["time"].endswith("+00:00")
+    assert [f["user"] for f in admin.get("/api/feedback?limit=2").json()["feedback"]] == ["amy", "boss"]
+    assert len(admin.get("/api/feedback?limit=0").json()["feedback"]) == 1
+    assert len((tmp_path / "feedback.jsonl").read_text(encoding="utf-8").splitlines()) == 5
+
+    # a broken line (e.g. hand-edited) is skipped, not fatal
+    with (tmp_path / "feedback.jsonl").open("a", encoding="utf-8") as f:
+        f.write('{"user": "x", "te\n')
+    assert len(admin.get("/api/feedback").json()["feedback"]) == 5
+
+
+def test_feedback_rate_limit(libdir, tmp_path):
+    app, store = make_app(libdir, tmp_path, users=[("amy", "reader"), ("bob", "reader")])
+    jan, _ = ids(store)
+    amy, bob = TestClient(app), TestClient(app)
+    login(amy, "amy"), login(bob, "bob")
+    body = {"mag_id": jan, "page": 0, "text": "好"}
+    assert amy.post("/api/feedback", json={**body, "text": ""}).status_code == 400  # rejected posts don't count
+    for _ in range(20):
+        assert amy.post("/api/feedback", json=body).status_code == 200
+    r = amy.post("/api/feedback", json=body)
+    assert r.status_code == 429 and "频繁" in r.json()["detail"]
+    assert bob.post("/api/feedback", json=body).status_code == 200            # per user, not global
+    assert len((tmp_path / "feedback.jsonl").read_text(encoding="utf-8").splitlines()) == 21
+
+
+def test_feedback_without_accounts_is_local_admin(libdir, tmp_path):
+    app, store = make_app(libdir, tmp_path)
+    jan, _ = ids(store)
+    c = TestClient(app)
+    assert c.get("/api/feedback").json() == {"feedback": []}                  # no file yet
+    assert c.post("/api/feedback", json={"mag_id": jan, "page": 0, "text": "ok"}).status_code == 200
+    assert c.get("/api/feedback").json()["feedback"][0]["user"] == "本机"

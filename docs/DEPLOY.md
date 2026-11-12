@@ -72,7 +72,11 @@ deploy/sync.sh ubuntu@你的服务器IP 2026.12       # 只导出新的一期（
 ## 4. 日常
 - 查看日志：`journalctl -u maglens -f`
 - 更新代码：本机直接 `deploy/sync.sh ubuntu@服务器IP`，代码会随数据一起上传并重启服务
-- 备份：服务器上只有 `auth.json` 是独有的，其余内容都能从本机重新导出。**真正要备份的是本机**：杂志 PDF 和 `~/.maglens/maglens.sqlite3`（花钱翻出来的结果）。放移动硬盘或私有云盘做冷备份，不要放在读者用的服务器上。
+- 查看读者反馈：反馈存在服务器的 `data/feedback.jsonl`（每行一条 JSON），和 `auth.json` 一样只在服务器上，`sync.sh` 不会上传或覆盖它。管理员也可以用 `GET /api/feedback` 查看。拿到本机：
+  ```bash
+  ssh admin@<服务器IP> 'sudo cat /opt/maglens/data/feedback.jsonl' > feedback.jsonl
+  ```
+- 备份：服务器上只有 `auth.json` 和 `feedback.jsonl` 是独有的，其余内容都能从本机重新导出。**真正要备份的是本机**：杂志 PDF 和 `~/.maglens/maglens.sqlite3`（花钱翻出来的结果）。放移动硬盘或私有云盘做冷备份，不要放在读者用的服务器上。
 
 ## 成本（每月）
 | 项目 | 费用 |

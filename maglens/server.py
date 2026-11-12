@@ -8,8 +8,11 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
@@ -35,11 +38,15 @@ ADMIN_ONLY = [  # (method, path regex)
     ("GET", r"/api/users"),
     ("POST", r"/api/users(/.*)?"),
     ("DELETE", r"/api/users/.*"),
+    ("GET", r"/api/feedback"),
 ]
 USERNAME = re.compile(r"[\w.\-]{1,32}")  # \w includes CJK, so Chinese names are fine
 MIN_PASSWORD = 8
 WIDTHS = (360, 1600, 2400)
 LOGIN_MAX_FAILURES, LOGIN_WINDOW = 10, 15 * 60  # per client IP
+FEEDBACK_MAX_CHARS = 1000
+FEEDBACK_MAX_POSTS, FEEDBACK_WINDOW = 20, 60 * 60  # per user
+FEEDBACK_LIST_DEFAULT, FEEDBACK_LIST_MAX = 200, 1000
 
 
 # Pages a PDF distributor slipped in (Chinese promo / QR-code pages): skipped when reading, and left
@@ -374,6 +381,60 @@ def create_app(cfg: Config, engine=None) -> FastAPI:
                 if b.get("note"):
                     out.append(f"> 译注：{b['note']}\n")
         return Response("\n".join(out), media_type="text/markdown; charset=utf-8")
+
+    # ------------------------------------------------------------------ feedback
+    # One JSON object per line in <data_dir>/feedback.jsonl. It only exists on the server (sync.sh
+    # never uploads or overwrites it), like auth.json.
+    feedback_file = cfg.data_dir / "feedback.jsonl"
+    feedback_lock = threading.Lock()  # sync handlers run in a thread pool
+    feedback_posts: dict[str, list[float]] = {}  # user name -> recent post times
+
+    @app.post("/api/feedback")
+    def feedback_add(request: Request, mag_id: Any = Body(None), page: Any = Body(None),
+                     text: Any = Body(None)):
+        if not isinstance(mag_id, str) or not mag_id:
+            raise HTTPException(400, "缺少杂志")
+        m = mag_or_404(mag_id, request)  # a scoped reader gets 404 for issues hidden from them
+        if not isinstance(page, int) or isinstance(page, bool) or not 0 <= page < m["pages"]:
+            raise HTTPException(400, "页码不对")
+        text = text.strip() if isinstance(text, str) else ""
+        if not text:
+            raise HTTPException(400, "请写下你的意见")
+        if len(text) > FEEDBACK_MAX_CHARS:
+            raise HTTPException(400, f"最多 {FEEDBACK_MAX_CHARS} 字")
+        name, now = request.state.user["name"], time.time()
+        entry = {"time": datetime.now(timezone.utc).isoformat(timespec="seconds"), "user": name,
+                 "mag_id": mag_id, "title": m["title"], "page": page, "text": text}
+        with feedback_lock:
+            recent = [t for t in feedback_posts.get(name, []) if now - t < FEEDBACK_WINDOW]
+            if len(recent) >= FEEDBACK_MAX_POSTS:
+                feedback_posts[name] = recent
+                raise HTTPException(429, "反馈太频繁了，请过一会儿再发")
+            feedback_file.parent.mkdir(parents=True, exist_ok=True)
+            with feedback_file.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+            feedback_posts[name] = recent + [now]
+        return {"ok": True}
+
+    @app.get("/api/feedback")
+    def feedback_list(limit: int = FEEDBACK_LIST_DEFAULT):
+        limit = max(1, min(limit, FEEDBACK_LIST_MAX))
+        with feedback_lock:
+            try:
+                lines = feedback_file.read_text(encoding="utf-8").splitlines()
+            except FileNotFoundError:
+                lines = []
+        out = []
+        for line in reversed(lines):  # appended in time order, so newest is last
+            try:
+                entry = json.loads(line)
+            except ValueError:
+                continue  # skip a truncated or hand-edited line rather than failing the whole list
+            if isinstance(entry, dict):
+                out.append(entry)
+                if len(out) >= limit:
+                    break
+        return {"feedback": out}
 
     web = ROOT / "web"
     app.mount("/", StaticFiles(directory=web, html=True), name="web")
