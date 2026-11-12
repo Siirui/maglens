@@ -885,3 +885,13 @@ async function pollProgress() {
   route();
   pollProgress();
 })();
+
+// ---------------------------------------------------------------- home screen
+// iPhone Safari never offers to install, so the shelf says once how to add MagLens to the home screen.
+// navigator.standalone is false only in iOS WebKit outside a home-screen app; WeChat cannot add to the home screen.
+(() => {
+  const hint = $("#a2hs"), ua = navigator.userAgent;
+  if (!hint || !/iPhone|iPod/.test(ua) || navigator.standalone !== false || /MicroMessenger/i.test(ua) || store.get("a2hs", false)) return;
+  hint.hidden = false;
+  hint.querySelector("button").onclick = () => { hint.hidden = true; store.set("a2hs", true); };
+})();

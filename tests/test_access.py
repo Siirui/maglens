@@ -107,6 +107,24 @@ def test_login_page_assets_and_security_headers(libdir, tmp_path):
     assert "strict-transport-security" in TestClient(app, base_url="https://testserver").get("/login.html").headers
 
 
+def test_home_screen_files_are_public(libdir, tmp_path):
+    """Browsers fetch the manifest and its icons (iOS: apple-touch-icon) without cookies."""
+    app, _ = make_app(libdir, tmp_path, users=[("boss", "admin"), ("amy", "reader")])
+    anon = TestClient(app)
+    r = anon.get("/manifest.webmanifest", follow_redirects=False)
+    assert r.status_code == 200 and r.headers["content-type"].startswith("application/manifest+json")
+    m = r.json()
+    assert m["display"] == "standalone" and m["start_url"] == "/" and m["scope"] == "/"
+    icons = {i["src"]: i for i in m["icons"]}
+    assert {i["sizes"] for i in icons.values()} >= {"192x192", "512x512"}
+    assert any(i["purpose"] == "maskable" for i in icons.values())
+    for path in [*icons, "/apple-touch-icon.png"]:
+        r = anon.get(path, follow_redirects=False)
+        assert r.status_code == 200 and r.headers["content-type"] == "image/png", path
+    assert anon.get("/app.js", follow_redirects=False).status_code == 303    # the app itself still needs a login
+    assert anon.get("/index.html", follow_redirects=False).status_code == 303
+
+
 def test_no_inline_scripts_under_csp():
     """The CSP forbids inline scripts and inline event handlers, so none may exist in web/."""
     web = Path(__file__).resolve().parent.parent / "web"

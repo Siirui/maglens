@@ -7,6 +7,7 @@ and every request is the local admin.
 from __future__ import annotations
 
 import json
+import mimetypes
 import re
 import sys
 import threading
@@ -27,6 +28,8 @@ from .prompts import PROMPT_VERSION
 from .store import Store, available
 
 LOCAL_ADMIN = {"name": "本机", "role": "admin"}
+# Older Pythons / system mime.types may not know it; browsers want this exact type for the manifest.
+mimetypes.add_type("application/manifest+json", ".webmanifest")
 # Sent on every response by the app itself (not only by Caddy), so local runs and tests see exactly what
 # readers get. Scripts only from this site: no inline <script> or on...= handlers anywhere in web/.
 SECURITY_HEADERS = {
@@ -41,6 +44,8 @@ SECURITY_HEADERS = {
 }
 HSTS = "max-age=31536000"  # HTTPS only for a year; only sent over HTTPS (Caddy passes the scheme through)
 PUBLIC = {"/login.html", "/login.js", "/style.css", "/robots.txt", "/api/login", "/api/me", "/favicon.ico", "/favicon.svg"}
+# home-screen install: browsers fetch the manifest and its icons (iOS: apple-touch-icon) without cookies
+PUBLIC |= {"/manifest.webmanifest", "/icon-192.png", "/icon-512.png", "/icon-maskable-512.png", "/apple-touch-icon.png"}
 ADMIN_ONLY = [  # (method, path regex)
     ("POST", r"/api/library/rescan"),
     ("POST", r"/api/mag/[^/]+/page/\d+/retranslate"),
