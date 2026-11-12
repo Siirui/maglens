@@ -16,6 +16,7 @@ import sys
 
 from .auth import ROLES, Auth
 from .config import load_config
+from .reading import ReadingState
 
 
 def _ask_password() -> str:
@@ -61,7 +62,11 @@ def main(argv=None):
         auth.set_user(args.name, _ask_password(), u["role"], u.get("mags"))
         print("密码已更新")
     elif args.cmd == "remove":
-        print("已删除" if auth.remove_user(args.name) else f"没有这个账号：{args.name}")
+        if auth.remove_user(args.name):
+            ReadingState(cfg.data_dir / "reading.json").forget(args.name)  # same as removing it on the web
+            print("已删除")
+        else:
+            print(f"没有这个账号：{args.name}")
     elif args.cmd == "scope":
         if args.name not in auth.users:
             sys.exit(f"没有这个账号：{args.name}")

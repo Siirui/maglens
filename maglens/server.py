@@ -20,6 +20,7 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Red
 from fastapi.staticfiles import StaticFiles
 
 from . import guard, library, render
+from .reading import ReadingState
 from .auth import COOKIE, ROLES, SESSION_DAYS, Auth
 from .config import ROOT, Config
 from .extract import make_engine
@@ -103,6 +104,7 @@ def create_app(cfg: Config, engine=None) -> FastAPI:
     # clock and shrink the rules.
     app.state.limiter = guard.RateLimiter()  # read per request, so a test can replace it
     access_log = app.state.access_log = guard.JsonlFile(cfg.data_dir / "access.jsonl", guard.ACCESS_MAX_BYTES)
+    reading = app.state.reading = ReadingState(cfg.data_dir / "reading.json")  # see maglens/reading.py
 
     # ------------------------------------------------------------------ auth
     @app.middleware("http")
@@ -291,6 +293,7 @@ def create_app(cfg: Config, engine=None) -> FastAPI:
         if name == me_name:
             raise HTTPException(400, "不能删除自己正在使用的账号")
         auth.remove_user(name)
+        reading.forget(name)  # a new account with the same name must not inherit this one's position
         return account_list()
 
     # ------------------------------------------------------------------ library
@@ -475,6 +478,35 @@ def create_app(cfg: Config, engine=None) -> FastAPI:
     def feedback_list(limit: int = FEEDBACK_LIST_DEFAULT):
         limit = max(1, min(limit, FEEDBACK_LIST_MAX))
         return {"feedback": feedback_file.entries(newest=limit)}
+
+    # ------------------------------------------------------------------ reading position
+    # "继续阅读" per account, so it follows the account across devices (maglens/reading.py). Pages are
+    # 0-based. The frontend only uses this when logged in; local single-user mode keeps localStorage.
+    @app.get("/api/reading")
+    def reading_get(request: Request):
+        # only issues this account can open now (same rule as mag_or_404): a scope narrowed since, or an
+        # issue taken down, is left out
+        mags = {m["id"]: m for m in store.magazines()
+                if is_admin(request) or (available(m) and can_see(request, m["id"]))}
+        pages = {k: e for k, e in reading.get(request.state.user["name"]).items()  # newest first
+                 if k in mags and e["page"] < mags[k]["pages"]}
+        last = next(({"mag_id": k, **v} for k, v in pages.items()), None)
+        return {"last": last, "pages": pages}
+
+    @app.put("/api/reading")
+    def reading_put(request: Request, mag_id: Any = Body(None), page: Any = Body(None), at: Any = Body(None)):
+        # `at` (the client's clock) is accepted but ignored: phones' clocks drift, and the frontend saves
+        # within a couple of seconds of the page change, so the server's time orders devices well enough.
+        throttle(request, mag_id if isinstance(mag_id, str) else "", page if isinstance(page, int) else -1,
+                 "reading")
+        if not isinstance(mag_id, str) or not mag_id:
+            raise HTTPException(400, "缺少杂志")
+        m = mag_or_404(mag_id, request)  # a scoped reader gets 404 for issues hidden from them
+        if not isinstance(page, int) or isinstance(page, bool) or not 0 <= page < m["pages"]:
+            raise HTTPException(400, "页码不对")
+        now = guard.utc_now(ms=True)
+        reading.put(request.state.user["name"], mag_id, page, now)
+        return {"ok": True, "at": now}
 
     # ------------------------------------------------------------------ access log (admin only)
     # <data_dir>/access.jsonl: one line per reader page view and per 429. Server-only, like feedback.

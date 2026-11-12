@@ -67,15 +67,69 @@ LANDPHONE.addEventListener("change", () => fitPages());
 window.addEventListener("hashchange", route);
 async function route() {
   const m = location.hash.match(/^#\/m\/([\w]+)(?:\/(\d+))?/);
-  if (m) return openReader(m[1], m[2] ? +m[2] - 1 : store.get("last." + m[1], 0));
+  if (m) return openReader(m[1], m[2] ? +m[2] - 1 : await resumePage(m[1]));
   showShelf();
 }
+
+// ---------------------------------------------------------------- reading sync
+// Where each issue was left off. localStorage is the fast/offline copy (maglens.lastMag,
+// maglens.last.<id> = 0-based page, maglens.at.<id> = when, ISO); when logged in the same is saved to
+// the server (/api/reading) so "继续阅读" follows the account to other devices. Whichever is newer wins;
+// local entries from before timestamps existed count as older than anything on the server. Every
+// server call fails soft (offline, 429, ...): we just keep using localStorage.
+const RS = { server: null, timer: 0, pending: null, SAVE_AFTER: 1500 };
+const syncOn = () => ME.auth && !!ME.user;  // local single-user mode: localStorage only
+const atMs = e => (e && Date.parse(e.at)) || 0;
+const newer = (a, b) => (!a ? b : !b ? a : atMs(b) > atMs(a) ? b : a);
+function localPos(id) {
+  const page = store.get("last." + id, null);
+  return Number.isInteger(page) ? { mag_id: id, page, at: store.get("at." + id, "") } : null;
+}
+// newest known position in one issue (server or this browser), or null
+function knownPos(id) {
+  const s = RS.server?.pages?.[id];
+  return newer(localPos(id), s && { mag_id: id, ...s });
+}
+async function loadServerPos() {
+  if (!syncOn()) return null;
+  try {
+    const r = await fetch("/api/reading", { cache: "no-store" });
+    if (r.ok) RS.server = await r.json();
+  } catch {}
+  return RS.server;
+}
+async function resumePage(id) {
+  await loadServerPos();
+  return knownPos(id)?.page ?? 0;
+}
+function rememberPos(id, page) {
+  store.set("lastMag", id); store.set("last." + id, page); store.set("at." + id, new Date().toISOString());
+  if (!syncOn()) return;
+  if (RS.pending && RS.pending.mag_id !== id) flushPos();  // switched issues: keep where the last one stopped
+  RS.pending = { mag_id: id, page };
+  clearTimeout(RS.timer);
+  RS.timer = setTimeout(flushPos, RS.SAVE_AFTER);  // only once the reader stays on a page
+}
+function flushPos(keepalive = false) {
+  clearTimeout(RS.timer);
+  const body = RS.pending;
+  if (!body) return;
+  RS.pending = null;
+  fetch("/api/reading", { method: "PUT", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body), keepalive })
+    .then(r => r.ok ? r.json() : null)
+    .then(j => { if (j && RS.server) RS.server.pages[body.mag_id] = { page: body.page, at: j.at }; })
+    .catch(() => {});
+}
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") flushPos(true); });
+window.addEventListener("pagehide", () => flushPos(true));
 
 // ---------------------------------------------------------------- shelf
 async function showShelf() {
   $("#reader").hidden = true; $("#tools").hidden = true; $("#shelf").hidden = false;
   $("#bar").classList.remove("reading");
-  const lib = await api("/api/library");
+  flushPos();  // coming back from the reader: save where it stopped right away
+  const [lib, server] = await Promise.all([api("/api/library"), loadServerPos()]);
   setUser(lib.user, lib.auth);
   lib.magazines.sort(byIssue);
   const ready = lib.magazines.filter(m => m.available).length;
@@ -86,10 +140,14 @@ async function showShelf() {
     : `${ready} 本可以阅读` + (ready < lib.magazines.length ? ` · ${lib.magazines.length - ready} 本即将上线` : "");
   if ($("#rescan")) $("#rescan").onclick = async () => { await api("/api/library/rescan", { method: "POST" }); showShelf(); };
 
-  // continue reading: the magazine opened last, at the page it was left on (both kept per browser)
-  const last = lib.magazines.find(m => m.id === store.get("lastMag") && (isAdmin() || m.available));
+  // continue reading: the magazine read last (on this browser or, when logged in, on any device of
+  // this account), at the newest page known for it
+  const openable = id => lib.magazines.find(m => m.id === id && (isAdmin() || m.available));
+  const cand = [localPos(store.get("lastMag")), server?.last].filter(e => e && openable(e.mag_id))
+    .reduce((a, b) => newer(a, b), null);
+  const last = cand && openable(cand.mag_id);
   $("#continue").innerHTML = last ? (() => {
-    const p = store.get("last." + last.id, 0) + 1;
+    const p = (knownPos(last.id)?.page ?? 0) + 1;
     return `<a class="cont" href="#/m/${last.id}/${p}">
       <span class="sticker" aria-hidden="true">つづき！</span>
       <img alt="" src="/api/mag/${last.id}/page/${last.cover || 0}.png?w=360">
@@ -130,7 +188,6 @@ function card(m) {
 async function openReader(id, page) {
   $("#shelf").hidden = true; $("#reader").hidden = false; $("#tools").hidden = false;
   $("#bar").classList.add("reading");
-  store.set("lastMag", id);
   if (!S.mag || S.mag.id !== id) {
     S.mag = await api(`/api/mag/${id}`); S.data = {};
     FB.draft = "";  // a draft belongs to the magazine it was written in
@@ -141,7 +198,7 @@ async function openReader(id, page) {
     buildThumbs();
   }
   S.page = clampPage(page);
-  store.set("last." + id, S.page);
+  rememberPos(id, S.page);
   render();
 }
 

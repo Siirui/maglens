@@ -36,6 +36,10 @@ from typing import Callable
 #   3000 / hour  - the public trial account is shared, so the per-IP rules alone could be farmed
 #                  from many IPs. 3000/h is ~10 people reading at full speed at the same time;
 #                  more than that on one account means it is being farmed, not read.
+# Saving the reading position (PUT /api/reading), per (account, IP):
+#   60 / minute  - the reader saves once it has stayed on a page for ~1.5 s (plus once when the tab is
+#                  hidden), so even page-by-page skimming stays around 40/min. Each save rewrites a
+#                  small file on disk, so a script must not be able to make it spin.
 # IPv6 clients are keyed by their /64 (see client_key), since one host can rotate through a /64.
 MINUTE, HOUR = 60, 60 * 60
 RULES: dict[str, list[tuple[int, float]]] = {  # bucket -> [(max hits, window seconds)]
@@ -44,6 +48,7 @@ RULES: dict[str, list[tuple[int, float]]] = {  # bucket -> [(max hits, window se
     "data": [(120, MINUTE), (600, HOUR)],
     "img_account": [(3000, HOUR)],
     "data_account": [(3000, HOUR)],
+    "reading": [(60, MINUTE)],
 }
 PRUNE_EVERY = 60.0  # seconds between sweeps that drop keys with no hit inside their longest window
 # A client hammering after its 429 isn't counted (see RateLimiter), so without this every refused
@@ -184,8 +189,8 @@ class JsonlFile:
         return out
 
 
-def utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+def utc_now(ms: bool = False) -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="milliseconds" if ms else "seconds")
 
 
 def summarize(entries: list[dict], hours: int, now: datetime | None = None) -> dict:

@@ -723,3 +723,135 @@ def test_limiter_prunes_idle_keys():
         lim.hit([("img", ("u", "busy"))])
         clock.t += 31
     assert len(lim._hits[("img", ("u", "busy"))]) <= 2
+
+
+# ---------------------------------------------------------------------- reading position (继续阅读)
+def test_reading_position_per_account(libdir, tmp_path):
+    """Each account keeps its own reading position on the server; only issues it can open come back."""
+    app, store = make_app(libdir, tmp_path, users=[("boss", "admin"), ("amy", "reader"), ("bob", "reader"),
+                                                   ("trial", "reader")])
+    jan, feb = ids(store)                                      # only 1月 is finished
+    Auth(tmp_path / "auth.json").set_mags("trial", [jan])
+    admin, amy, bob, trial, anon = (TestClient(app) for _ in range(5))
+    for c, n in ((admin, "boss"), (amy, "amy"), (bob, "bob"), (trial, "trial")):
+        login(c, n)
+    put = lambda c, **kw: c.put("/api/reading", json={"mag_id": jan, "page": 1, **kw})
+
+    # logged out: nothing
+    assert anon.get("/api/reading").status_code == 401
+    assert put(anon).status_code == 401
+
+    assert amy.get("/api/reading").json() == {"last": None, "pages": {}}
+    r = put(amy, page=2, at="1999-01-01T00:00:00Z")            # the client's clock is ignored
+    assert r.status_code == 200 and r.json()["ok"] and not r.json()["at"].startswith("1999")
+    st = amy.get("/api/reading").json()
+    assert st["last"] == {"mag_id": jan, "page": 2, "at": r.json()["at"]}
+    assert st["pages"] == {jan: {"page": 2, "at": r.json()["at"]}}
+
+    # validation, like feedback
+    for body, code in (({"page": 1}, 400), ({"mag_id": "", "page": 1}, 400), ({"mag_id": 5, "page": 1}, 400),
+                       ({"mag_id": "nope", "page": 1}, 404), ({"mag_id": jan}, 400),
+                       ({"mag_id": jan, "page": 3}, 400), ({"mag_id": jan, "page": -1}, 400),
+                       ({"mag_id": jan, "page": True}, 400), ({"mag_id": jan, "page": 1.0}, 400),
+                       ({"mag_id": jan, "page": "1"}, 400)):
+        assert amy.put("/api/reading", json=body).status_code == code, body
+    assert amy.get("/api/reading").json()["pages"][jan]["page"] == 2   # rejected writes change nothing
+
+    # unfinished issue: 404 for readers (as if it didn't exist), fine for the admin
+    assert put(amy, mag_id=feb).status_code == 404
+    assert put(admin, mag_id=feb).status_code == 200
+    assert put(admin, page=0).status_code == 200
+    st = admin.get("/api/reading").json()
+    assert st["last"]["mag_id"] == jan and list(st["pages"]) == [jan, feb]   # newest first
+
+    # accounts never see each other's position
+    assert bob.get("/api/reading").json() == {"last": None, "pages": {}}
+    assert put(bob, page=0).status_code == 200
+    assert amy.get("/api/reading").json()["pages"][jan]["page"] == 2
+    assert bob.get("/api/reading").json()["pages"][jan]["page"] == 0
+
+    # a scoped reader: hidden issues are 404, and positions in issues hidden later are left out
+    assert put(trial).status_code == 200
+    Auth(tmp_path / "auth.json").set_mags("trial", [feb])
+    assert put(trial).status_code == 404
+    assert trial.get("/api/reading").json() == {"last": None, "pages": {}}
+    Auth(tmp_path / "auth.json").set_mags("trial", [jan])
+    assert trial.get("/api/reading").json()["last"]["mag_id"] == jan
+
+    # it survives a restart (a new app on the same data dir), and removing an account forgets it
+    cfg = load_config(library_dir=libdir, data_dir=tmp_path, manual=True)
+    app2 = create_app(cfg, extract.ManualEngine(cfg))
+    amy2, admin2 = TestClient(app2), TestClient(app2)
+    login(amy2, "amy"), login(admin2, "boss")
+    assert amy2.get("/api/reading").json()["pages"][jan]["page"] == 2
+    assert admin2.delete("/api/users/amy").status_code == 200
+    assert admin2.post("/api/users", json={"name": "amy", "password": "pw-amy-again"}).status_code == 200
+    amy3 = TestClient(app2)
+    assert amy3.post("/api/login", json={"name": "amy", "password": "pw-amy-again"}).status_code == 200
+    assert amy3.get("/api/reading").json() == {"last": None, "pages": {}}
+    assert "amy" not in json.loads((tmp_path / "reading.json").read_text(encoding="utf-8"))
+
+
+def test_reading_without_accounts_is_local_admin(libdir, tmp_path):
+    app, store = make_app(libdir, tmp_path)
+    jan, _ = ids(store)
+    c = TestClient(app)
+    assert c.put("/api/reading", json={"mag_id": jan, "page": 1}).status_code == 200
+    assert c.get("/api/reading").json()["last"]["page"] == 1
+    assert "本机" in json.loads((tmp_path / "reading.json").read_text(encoding="utf-8"))
+
+
+def test_reading_cap_and_damaged_file(tmp_path):
+    from maglens.reading import ReadingState
+    rs = ReadingState(tmp_path / "reading.json", max_mags=3)
+    for i in range(5):
+        rs.put("amy", f"m{i}", i, f"2026-11-11T00:00:0{i}+00:00")
+    rs.put("amy", "m2", 9, "2026-11-11T00:00:09+00:00")         # re-reading an issue moves it to the front
+    assert list(rs.get("amy")) == ["m2", "m4", "m3"]
+    assert rs.get("amy")["m2"]["page"] == 9 and rs.get("bob") == {}
+    (tmp_path / "reading.json").write_text("{not json", encoding="utf-8")
+    assert rs.get("amy") == {}                                  # a damaged file is set aside, not fatal
+    assert (tmp_path / "reading.json.bad").read_text(encoding="utf-8") == "{not json"
+    rs.put("amy", "m0", 0, "2026-11-11T00:01:00+00:00")
+    assert list(rs.get("amy")) == ["m0"]
+
+
+def test_reading_concurrent_puts_keep_the_file_whole(libdir, tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+    app, store = make_app(libdir, tmp_path, users=[("boss", "admin")] + [(f"r{i}", "reader") for i in range(4)])
+    jan, _ = ids(store)
+    clients = []
+    for i in range(4):
+        c = TestClient(app)
+        login(c, f"r{i}")
+        clients.append(c)
+
+    def work(i):
+        return clients[i % 4].put("/api/reading", json={"mag_id": jan, "page": i % 3}).status_code
+
+    with ThreadPoolExecutor(8) as ex:
+        assert set(ex.map(work, range(80))) == {200}
+    data = json.loads((tmp_path / "reading.json").read_text(encoding="utf-8"))  # still valid JSON
+    assert set(data) == {f"r{i}" for i in range(4)}                  # no account's write was lost
+    for c in clients:
+        assert c.get("/api/reading").json()["last"]["mag_id"] == jan
+    assert not list(tmp_path.glob("reading.json.*"))            # no temp files left behind
+
+
+def test_reading_rate_limit(libdir, tmp_path):
+    app, store = make_app(libdir, tmp_path, users=[("boss", "admin"), ("amy", "reader")])
+    jan, _ = ids(store)
+    clock = Clock()
+    app.state.limiter = guard.RateLimiter({"reading": [(3, 60)]}, clock=clock)
+    amy, boss = TestClient(app), TestClient(app)
+    login(amy, "amy"), login(boss, "boss")
+    for _ in range(3):
+        assert amy.put("/api/reading", json={"mag_id": jan, "page": 0}).status_code == 200
+    r = amy.put("/api/reading", json={"mag_id": jan, "page": 1})
+    assert r.status_code == 429 and "Retry-After" in r.headers
+    assert amy.get("/api/reading").json()["last"]["page"] == 0  # the refused write didn't land
+    for _ in range(10):                                           # the admin is never limited
+        assert boss.put("/api/reading", json={"mag_id": jan, "page": 0}).status_code == 200
+    clock.t += 61
+    assert amy.put("/api/reading", json={"mag_id": jan, "page": 1}).status_code == 200
+    assert guard.RULES["reading"] == [(60, 60)]

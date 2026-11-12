@@ -77,11 +77,12 @@ deploy/sync.sh ubuntu@你的服务器IP 2026.12       # 只导出新的一期（
   ```bash
   ssh admin@<服务器IP> 'sudo cat /opt/maglens/data/feedback.jsonl' > feedback.jsonl
   ```
-- 查看访问记录：读者每看一页译文（`GET /api/mag/{id}/page/{n}`，不含图片，不记管理员）和被限速（被拒后还在连续请求的，同一类别每 10 秒只记一行，免得刷满日志），都会在服务器的 `data/access.jsonl` 追加一行 JSON：`{"time": UTC 时间, "user", "ip", "mag_id", "page", "event": "view" 或 "limited:<类别>"}`，类别是 `img` / `thumb` / `data` / `img_account` / `data_account`。超过约 20MB 时改名为 `access.jsonl.1`（只留一个旧文件）。和 `feedback.jsonl` 一样只在服务器上，`sync.sh` 不会上传或覆盖。管理员可以用 `GET /api/access/summary?hours=24`（最多 168）看每个账号的浏览数、不同页数、IP 数、最后访问时间、被限速次数，以及最近 20 次限速。拿到本机：
+- 查看访问记录：读者每看一页译文（`GET /api/mag/{id}/page/{n}`，不含图片，不记管理员）和被限速（被拒后还在连续请求的，同一类别每 10 秒只记一行，免得刷满日志），都会在服务器的 `data/access.jsonl` 追加一行 JSON：`{"time": UTC 时间, "user", "ip", "mag_id", "page", "event": "view" 或 "limited:<类别>"}`，类别是 `img` / `thumb` / `data` / `img_account` / `data_account` / `reading`。超过约 20MB 时改名为 `access.jsonl.1`（只留一个旧文件）。和 `feedback.jsonl` 一样只在服务器上，`sync.sh` 不会上传或覆盖。管理员可以用 `GET /api/access/summary?hours=24`（最多 168）看每个账号的浏览数、不同页数、IP 数、最后访问时间、被限速次数，以及最近 20 次限速。拿到本机：
   ```bash
   ssh admin@<服务器IP> 'sudo cat /opt/maglens/data/access.jsonl' > access.jsonl
   ```
-- 备份：服务器上只有 `auth.json`、`feedback.jsonl` 和 `access.jsonl` 是独有的，其余内容都能从本机重新导出。**真正要备份的是本机**：杂志 PDF 和 `~/.maglens/maglens.sqlite3`（花钱翻出来的结果）。放移动硬盘或私有云盘做冷备份，不要放在读者用的服务器上。
+- 阅读进度：登录后每个账号读到哪一期哪一页存在服务器的 `data/reading.json`（`{账号: {"last": {mag_id, page, at}, "pages": {杂志 id: {page, at}}}}`，页码从 0 开始，时间是服务器的 UTC 时间，每个账号只留最近 50 期），换设备打开「继续阅读」会接上。读者通过 `GET /api/reading` / `PUT /api/reading` 读写自己的，看不到别人的；保存每分钟最多 60 次（超过 429，类别 `reading`）。删除账号时会一起删掉它的进度。和 `auth.json` 一样只在服务器上，`sync.sh` 不会上传或覆盖，`backup.sh` 会备份它。
+- 备份：服务器上只有 `auth.json`、`feedback.jsonl`、`access.jsonl` 和 `reading.json` 是独有的，其余内容都能从本机重新导出。**真正要备份的是本机**：杂志 PDF 和 `~/.maglens/maglens.sqlite3`（花钱翻出来的结果）。放移动硬盘或私有云盘做冷备份，不要放在读者用的服务器上。
 
 ## 成本（每月）
 | 项目 | 费用 |
