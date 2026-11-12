@@ -7,6 +7,7 @@
   --line: #e2ddd2; --accent: #d2452d; --accent-soft: rgba(210, 69, 45, .14);
   --hl: rgba(255, 196, 0, .30); --hl-line: #e0a800; --stage: #2a2825;
   --yellow: #ffd400; --red: #e0442b; --blue: #2d5be3; --hard: #111; --dot: #e3dccb;
+  --sheet-shadow: 0 -6px 24px rgba(0, 0, 0, .28);
   --font: "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", "Microsoft YaHei", system-ui, sans-serif;
   --display: "Dela Gothic One", "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", sans-serif;
   --serif: "Songti SC", "Noto Serif SC", "Source Han Serif SC", serif;
@@ -15,7 +16,7 @@
 @media (prefers-color-scheme: dark) {
   :root { --bg: #1b1a18; --paper: #24221f; --ink: #ece7de; --ink2: #b4ada2; --ink3: #7c766c;
     --line: #38352f; --accent: #ff6a4d; --accent-soft: rgba(255, 106, 77, .16); --stage: #121110;
-    --hard: #000; --dot: #2a2825; }
+    --hard: #000; --dot: #2a2825; --sheet-shadow: 0 -6px 28px rgba(0, 0, 0, .7); }
 }
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
@@ -205,6 +206,7 @@ dialog small { color: var(--ink3); font-weight: 400; }
 }
 .grow { flex: 1; }
 
+@media (max-width: 860px) { #tools { overflow-x: auto; } #bar { overflow-x: auto; } }
 @media (max-width: 860px) and (orientation: portrait) {
   #reader { flex-direction: column; }
   #left { flex: none; height: 55%; }
@@ -282,6 +284,8 @@ dialog small { color: var(--ink3); font-weight: 400; }
   background: var(--bg); border: 1.5px solid var(--line); border-radius: 8px; resize: vertical; }
 .fb .fb-row { display: flex; gap: 8px; align-items: center; }
 .fb .fb-row .grow { flex: 1; }
+.fb select { font: inherit; color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 1px 4px; }
+.fb .fb-send:disabled { opacity: .6; cursor: wait; }
 .fb .fb-msg.err { color: var(--accent); }
 #fbdlg { width: min(720px, 92vw); }
 #fb-table { max-height: 60vh; overflow: auto; border: 1px solid var(--line); border-radius: 6px; }
@@ -301,7 +305,7 @@ html.sheet-ui #divider, html.sheet-ui #pager, html.sheet-ui #thumbs { display: n
 html.sheet-ui #stage { padding: 8px 8px calc(var(--peek, 64px) + 8px); touch-action: manipulation; }
 html.sheet-ui #right { position: absolute; left: 0; right: 0; bottom: 0; z-index: 4; height: var(--peek, 64px); min-width: 0; min-height: 0;
   flex: none !important; display: flex; flex-direction: column; overflow: hidden; border-radius: 18px 18px 0 0;
-  box-shadow: 0 -6px 24px rgba(0, 0, 0, .35); padding-bottom: env(safe-area-inset-bottom, 0px);
+  box-shadow: var(--sheet-shadow); padding-bottom: env(safe-area-inset-bottom, 0px);
   transition: height .28s cubic-bezier(.2, .8, .2, 1); }
 html.sheet-ui #right.dragging { transition: none; }
 html.sheet-ui #grab { display: block; flex: none; padding: 8px 12px 10px; cursor: grab; touch-action: none;

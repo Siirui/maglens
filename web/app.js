@@ -41,6 +41,10 @@ const S = {
 const SHEET = { mq: matchMedia("(max-width: 600px), (max-width: 860px) and (orientation: portrait)"),
   lvl: store.get("sheet", 0) };
 const sheetOn = () => SHEET.mq.matches;
+// landscape phones hide the fit/zoom buttons, so they must not inherit a fit or zoom saved elsewhere
+const LANDPHONE = matchMedia("(max-height: 500px) and (orientation: landscape)");
+const fixedFit = () => sheetOn() || LANDPHONE.matches;
+LANDPHONE.addEventListener("change", () => fitPages());
 
 // ---------------------------------------------------------------- routing
 window.addEventListener("hashchange", route);
@@ -128,7 +132,7 @@ async function openReader(id, page) {
 const ZOOM_MIN = 0.25, ZOOM_MAX = 5;
 function basePageHeight(w, h, n) {
   const ar = S.mag.aspect * n;                      // width / height of everything shown
-  switch (sheetOn() ? "page" : S.fit) {             // phones: always the whole page (no fit buttons there)
+  switch (fixedFit() ? "page" : S.fit) {           // phones: always the whole page (no fit buttons there)
     case "width": return w / ar;
     case "height": return h;
     case "fill": return Math.max(h, w / ar);
@@ -147,7 +151,7 @@ function fitPages(anchor) {
   const cs = getComputedStyle(st);
   const w = st.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
   const h = st.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
-  const ph = Math.max(80, Math.floor(basePageHeight(w, h, pgs.length) * (sheetOn() ? 1 : S.zoom)));
+  const ph = Math.max(80, Math.floor(basePageHeight(w, h, pgs.length) * (fixedFit() ? 1 : S.zoom)));
   const pw = Math.floor(ph * S.mag.aspect);
   const want = pw * (window.devicePixelRatio || 1) > 1700 ? 2400 : 1600;
   S.imgW = want;  // next render() and the prefetch use the same width -> one download per page
@@ -183,7 +187,8 @@ $("#stage").addEventListener("wheel", e => {
 {
   let t0 = null;
   $("#stage").addEventListener("touchstart", e => {
-    t0 = e.touches.length === 1 && !$("#stage").classList.contains("pannable") && !S.selecting
+    const pinched = (window.visualViewport?.scale || 1) > 1.01;  // panning a pinch-zoomed page
+    t0 = e.touches.length === 1 && !pinched && !$("#stage").classList.contains("pannable") && !S.selecting
       ? { x: e.touches[0].clientX, y: e.touches[0].clientY, t: Date.now() } : null;
   }, { passive: true });
   $("#stage").addEventListener("touchend", e => {
@@ -252,7 +257,7 @@ function render() {
   closeBubble();
   $("#pageinput").value = vis[0] + 1;
   $("#peek-page").textContent = `${vis.map(n => n + 1).join("–")} / ${S.mag.pages}`;
-  $("#peek-text").textContent = "译文";
+  $("#peek-text").textContent = "译文"; delete $("#peek-text").dataset.page;
   syncToolButtons();
   // left: page images (RTL binding puts the lower page number on the right)
   const order = S.rtl ? [...vis].reverse() : vis;
@@ -272,7 +277,7 @@ function render() {
   });
   const cur = $("#thumbs img.cur"); if (cur) cur.scrollIntoView({ block: "nearest", inline: "center" });
   // right
-  $("#panel").innerHTML = vis.map(n => `<div class="psec" data-page="${n}"></div>`).join("") + feedbackForm(vis[0]);
+  $("#panel").innerHTML = vis.map(n => `<div class="psec" data-page="${n}"></div>`).join("") + feedbackForm();
   $("#panel").scrollTop = 0;
   bindFeedback();
   vis.forEach(loadPage);
@@ -314,6 +319,8 @@ function head(n, d, r) {
 // "2", "#1", "A": photo numbers and markers. Nothing to read, so keep them out of the panel.
 const squash = s => (s || "").replace(/\s+/g, "").toLowerCase();
 const trivial = b => { const z = squash(b.zh); return z.length <= 3 && !/[\u3040-\u30ff\u4e00-\u9fff]/.test(z); };
+const readable = b => b.type !== "meta" && b.zh && !trivial(b);   // real text a reader would want
+const showJa = b => !!b.ja && squash(b.ja) !== squash(b.zh);       // Japanese worth showing under the Chinese
 
 function drawPanel(n, r) {
   const d = r.data, sec = $(`.psec[data-page="${n}"]`);
@@ -321,14 +328,15 @@ function drawPanel(n, r) {
     <div class="blk t-${b.type}" data-id="${b.id}" data-page="${n}">
       <div class="tag">${TYPE_LABEL[b.type] || b.type}${b.supplement ? `<span class="sup">补漏</span>` : ""}</div>
       <div class="zh">${esc(b.zh)}</div>
-      ${b.ja && squash(b.ja) !== squash(b.zh) ? `<div class="ja" lang="ja">${esc(b.ja)}</div>` : ""}
+      ${showJa(b) ? `<div class="ja" lang="ja">${esc(b.ja)}</div>` : ""}
       ${showNote(b.note) ? `<div class="note">${esc(b.note)}</div>` : ""}
     </div>`).join("");
   // readers only get the AI page summary when the page has no text of its own (e.g. a photo page)
-  const hasText = d.blocks.some(b => b.type !== "meta" && b.zh && !trivial(b));
+  const hasText = d.blocks.some(readable);
   sec.innerHTML = head(n, d, r) + (d.page_summary && (isAdmin() || !hasText) ? `<div class="summary">${esc(d.page_summary)}</div>` : "") +
     (blocks || `<div class="empty">这一页没有识别到文字</div>`);
-  if (n === visiblePages()[0]) $("#peek-text").textContent = peekTitle(d);
+  const pk = $("#peek-text"), first = n === visiblePages()[0];
+  if (first || !pk.dataset.page) { pk.textContent = peekTitle(d); pk.dataset.page = first ? n : ""; }
   sec.querySelectorAll(".blk").forEach(el => {
     el.onmouseenter = () => activate(n, el.dataset.id, false);
     el.onmouseleave = () => activate(n, null);
@@ -390,22 +398,22 @@ applyLayout();
 // drag the handle to resize (snaps to the nearest height); a tap cycles 0 -> 1 -> 2 -> 0
 {
   const grab = $("#grab"), right = $("#right");
-  let y0 = null, h0 = 0, moved = false;
+  let y0 = null, h0 = 0, moved = false, L = null;
   grab.addEventListener("pointerdown", e => {
     if (e.target.closest("button") || !sheetOn()) return;
-    y0 = e.clientY; h0 = right.offsetHeight; moved = false;
+    y0 = e.clientY; h0 = right.offsetHeight; moved = false; L = sheetLevels();
     grab.setPointerCapture(e.pointerId); right.classList.add("dragging");
   });
   grab.addEventListener("pointermove", e => {
     if (y0 === null) return;
     const dy = y0 - e.clientY; if (Math.abs(dy) > 5) moved = true;
-    const L = sheetLevels(); right.style.height = Math.max(L[0], Math.min(L[2], h0 + dy)) + "px";
+    right.style.height = Math.max(L[0], Math.min(L[2], h0 + dy)) + "px";
   });
   const end = () => {
     if (y0 === null) return;
     y0 = null; right.classList.remove("dragging");
     if (!moved) return setSheet((SHEET.lvl + 1) % 3);
-    const h = right.offsetHeight, L = sheetLevels();
+    const h = right.offsetHeight;
     setSheet(L.reduce((b, v, i) => Math.abs(v - h) < Math.abs(L[b] - h) ? i : b, 0));
   };
   grab.addEventListener("pointerup", end); grab.addEventListener("pointercancel", end);
@@ -416,7 +424,7 @@ applyLayout();
 }
 // the strip shows the page's headline (or the first real passage) so the page has a name at a glance
 function peekTitle(d) {
-  const ok = d.blocks.filter(b => b.type !== "meta" && b.zh && !trivial(b));
+  const ok = d.blocks.filter(readable);
   const b = ["title", "heading", "lead"].map(t => ok.find(x => x.type === t)).find(Boolean) || ok[0];
   return b ? b.zh.replace(/\s+/g, " ").trim() : "这一页没有文字";
 }
@@ -435,7 +443,7 @@ function showBubble(n, id, el) {
   if (!b || trivial(b)) return;
   activate(n, id, false);
   const left = $("#left"), bub = document.createElement("div");
-  const hasJa = b.ja && squash(b.ja) !== squash(b.zh);
+  const hasJa = showJa(b);
   bub.id = "bubble";
   bub.innerHTML = `<div class="bt"><span>P.${n + 1}</span><span class="grow"></span><button type="button" class="x" aria-label="关闭">✕</button></div>
     <div class="zh"></div>${hasJa ? `<div class="ja" lang="ja" hidden></div><div class="more">点一下看原文</div>` : ""}
@@ -460,27 +468,36 @@ function closeBubble() { const b = $("#bubble"); if (b) { b.remove(); activate(0
 $("#stage").addEventListener("click", e => { if (!e.target.closest(".bx")) closeBubble(); });
 
 // ---------------------------------------------------------------- feedback (readers -> admin)
-function feedbackForm(n) {
+// The draft survives page turns (the panel is rebuilt on every render), so a stray swipe loses nothing.
+const FB = { draft: "" };
+function feedbackForm() {
   if (!ME.auth) return "";  // local no-account mode: nobody to send it to
-  return `<div class="fb" data-page="${n}"><button type="button" class="fb-open">这一页的翻译有问题？告诉我</button></div>`;
+  return `<div class="fb"><button type="button" class="fb-open">${FB.draft ? "继续写没发出去的反馈" : "这一页的翻译有问题？告诉我"}</button></div>`;
 }
 function bindFeedback() {
   const box = $("#panel .fb"); if (!box) return;
   box.querySelector(".fb-open").onclick = () => {
-    box.innerHTML = `<label for="fb-text">第 ${+box.dataset.page + 1} 页：哪里不对，或者有什么建议？</label>
+    const vis = visiblePages();
+    const which = vis.length > 1  // spread: ask which page
+      ? `<select id="fb-page" aria-label="哪一页">${vis.map(n => `<option value="${n}">第 ${n + 1} 页</option>`).join("")}</select>`
+      : `第 ${vis[0] + 1} 页`;
+    box.innerHTML = `<label for="fb-text">${which}：哪里不对，或者有什么建议？</label>
       <textarea id="fb-text" maxlength="1000" placeholder="比如：第二段的店名翻错了"></textarea>
       <div class="fb-row"><span class="fb-msg" role="status"></span><span class="grow"></span>
         <button type="button" class="fb-cancel">取消</button><button type="button" class="fb-send primary">发送</button></div>`;
-    const ta = box.querySelector("textarea"), msg = box.querySelector(".fb-msg");
+    const ta = box.querySelector("textarea"), msg = box.querySelector(".fb-msg"), send = box.querySelector(".fb-send");
+    ta.value = FB.draft; ta.oninput = () => { FB.draft = ta.value; };
     ta.focus();
-    box.querySelector(".fb-cancel").onclick = () => { box.outerHTML = feedbackForm(+box.dataset.page); bindFeedback(); };
-    box.querySelector(".fb-send").onclick = async () => {
+    box.querySelector(".fb-cancel").onclick = () => { FB.draft = ""; box.outerHTML = feedbackForm(); bindFeedback(); };
+    send.onclick = async () => {
       const text = ta.value.trim();
       if (!text) { msg.textContent = "写点什么再发送"; msg.classList.add("err"); return ta.focus(); }
+      const page = vis.length > 1 ? +$("#fb-page").value : vis[0];
+      send.disabled = true; send.textContent = "发送中…";
       try {
-        await uapi("/api/feedback", "POST", { mag_id: S.mag.id, page: +box.dataset.page, text });
-        box.innerHTML = `<span>收到了，谢谢！</span>`;
-      } catch (err) { msg.textContent = err.message; msg.classList.add("err"); }
+        await uapi("/api/feedback", "POST", { mag_id: S.mag.id, page, text });
+        FB.draft = ""; box.innerHTML = `<span>收到了，谢谢！</span>`;
+      } catch (err) { msg.textContent = err.message; msg.classList.add("err"); send.disabled = false; send.textContent = "发送"; }
     };
   };
 }
