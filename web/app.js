@@ -116,6 +116,7 @@ async function openReader(id, page) {
   store.set("lastMag", id);
   if (!S.mag || S.mag.id !== id) {
     S.mag = await api(`/api/mag/${id}`); S.data = {};
+    FB.draft = "";  // a draft belongs to the magazine it was written in
     setOrder();
     fillMagSelect();
     $("#pagetotal").textContent = "/ " + S.mag.pages;
