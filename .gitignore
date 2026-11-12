@@ -4,3 +4,4 @@ __pycache__/
 .maglens/
 .DS_Store
 .venv/
+docs/PRIVATE.md

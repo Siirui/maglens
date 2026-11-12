@@ -9,7 +9,7 @@
 | 翻译数据 | `~/.maglens/maglens.sqlite3`：2,113 页里有 2,112 页翻好；4 月号第 145 页每次都被内容过滤拦下，只能看原图 |
 | 翻译花费 | Haiku，按标价折算约 $25，实际计入 Claude 订阅额度 |
 | 部署包 | `~/.maglens/dist`（12 本，1.07GB WebP + 精简数据库） |
-| 线上 | **https://maglens.net**（2026-11-12 上线）：阿里云吉隆坡轻量通用型，Alibaba Cloud Linux 4，`ssh admin@<服务器IP>`，同步用 `deploy/sync.sh admin@<服务器IP>`。详见 [DEPLOY.md](DEPLOY.md) 开头 |
+| 线上 | 服务器地址等私密信息在本机的 `docs/PRIVATE.md`（已加入 .gitignore，仓库是公开的）。**https://maglens.net**（2026-11-12 上线）：阿里云吉隆坡轻量通用型，Alibaba Cloud Linux 4，`ssh admin@<服务器IP>`，同步用 `deploy/sync.sh admin@<服务器IP>`。详见 [DEPLOY.md](DEPLOY.md) 开头 |
 | 本机服务 | `python run.py --manual`（只读，不调用模型）→ http://127.0.0.1:8765/ |
 
 **需要备份的是本机**：`~/Magazines/2026` 和 `~/.maglens/maglens.sqlite3`。服务器上的东西都能从本机重新导出，唯一的例外是服务器上的 `auth.json`（账号）。
