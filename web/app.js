@@ -455,7 +455,7 @@ $("#gloss-save").onclick = async () => {
 };
 
 // ---------------------------------------------------------------- accounts (admin)
-const U = { list: [], confirm: null };
+const U = { list: [], mags: [], confirm: null };
 const ROLE_ZH = { reader: "读者", admin: "管理员" };
 // like api(), but surfaces the server's error message (e.g. "账号已存在") instead of just the status
 async function uapi(p, method = "GET", body) {
@@ -482,10 +482,20 @@ function showSecret(name, pw, what) {
 }
 async function openUsers() {
   U.confirm = null; umsg("");
-  $("#ua-name").value = ""; $("#ua-pass").value = ""; $("#ua-role").value = "reader";
+  $("#ua-name").value = ""; $("#ua-pass").value = ""; $("#ua-role").value = "reader"; $("#ua-mags").disabled = false;
   $("#users").showModal();
-  try { U.list = (await uapi("/api/users")).users; drawUsers(); } catch (e) { umsg(esc(e.message), true); }
+  try { setUsers(await uapi("/api/users")); fillScope($("#ua-mags"), null); drawUsers(); }
+  catch (e) { umsg(esc(e.message), true); }
 }
+function setUsers(j) { U.list = j.users; U.mags = (j.magazines || []).slice().sort(byIssue); }
+// what a reader may open: "" = every issue, else one issue id (several ids only come from the CLI)
+function scopeOptions(mags) {
+  const v = mags == null ? "" : mags.length === 1 ? mags[0] : "multi";
+  const opts = [["", "全部杂志"], ...U.mags.map(m => [m.id, `仅 ${seriesName(m)} ${issueName(m)}`])];
+  if (v === "multi") opts.push(["multi", `${mags.length} 期`]);
+  return opts.map(([k, t]) => `<option value="${esc(k)}" ${k === v ? "selected" : ""}>${esc(t)}</option>`).join("");
+}
+function fillScope(sel, mags) { sel.innerHTML = scopeOptions(mags); }
 function drawUsers() {
   const me = ME.user?.name;
   $("#users-table").innerHTML = U.list.map(u => {
@@ -495,39 +505,49 @@ function drawUsers() {
       <select data-act="role" ${self ? "disabled title='不能取消自己的管理员身份'" : ""}>
         ${Object.entries(ROLE_ZH).map(([k, v]) => `<option value="${k}" ${k === u.role ? "selected" : ""}>${v}</option>`).join("")}
       </select>
+      <select data-act="mags" title="这个账号能看哪些杂志" ${u.role === "admin" ? "disabled" : ""}>
+        ${u.role === "admin" ? `<option>全部杂志</option>` : scopeOptions(u.mags)}
+      </select>
       <button type="button" data-act="reset">重置密码</button>
       <button type="button" data-act="del" class="${c ? "danger" : ""}" ${self ? "disabled title='不能删除自己'" : ""}>${c ? "确认删除" : "删除"}</button>
     </div>`;
   }).join("") || `<div class="empty">还没有账号。</div>`;
 }
 $("#users-table").onchange = async e => {
-  if (e.target.dataset.act !== "role") return;
-  const name = e.target.closest(".ur").dataset.name;
-  try { U.list = (await uapi(`/api/users/${encodeURIComponent(name)}/role`, "POST", { role: e.target.value })).users;
-    drawUsers(); umsg(`已把 <b>${esc(name)}</b> 改成${ROLE_ZH[e.target.value]}`); }
-  catch (err) { drawUsers(); umsg(esc(err.message), true); }
+  const act = e.target.dataset.act, name = e.target.closest(".ur")?.dataset.name, v = e.target.value;
+  try {
+    if (act === "role") {
+      setUsers(await uapi(`/api/users/${encodeURIComponent(name)}/role`, "POST", { role: v }));
+      drawUsers(); umsg(`已把 <b>${esc(name)}</b> 改成${ROLE_ZH[v]}`);
+    } else if (act === "mags" && v !== "multi") {
+      setUsers(await uapi(`/api/users/${encodeURIComponent(name)}/mags`, "POST", { mags: v ? [v] : null }));
+      drawUsers(); umsg(`<b>${esc(name)}</b> 现在可以看：${esc(e.target.selectedOptions[0].text.replace(/^仅 /, ""))}`);
+    }
+  } catch (err) { drawUsers(); umsg(esc(err.message), true); }
 };
 $("#users-table").onclick = async e => {
-  const act = e.target.dataset.act; if (!act || act === "role") return;
+  const act = e.target.dataset.act; if (!act || act === "role" || act === "mags") return;
   const name = e.target.closest(".ur").dataset.name;
   try {
     if (act === "reset") {
       const pw = genPassword();
-      U.list = (await uapi(`/api/users/${encodeURIComponent(name)}/password`, "POST", { password: pw })).users;
+      setUsers(await uapi(`/api/users/${encodeURIComponent(name)}/password`, "POST", { password: pw }));
       U.confirm = null; drawUsers(); showSecret(name, pw, "已重置，");
     } else if (act === "del") {
       if (U.confirm !== name) { U.confirm = name; drawUsers(); umsg(`再点一次「确认删除」删除 <b>${esc(name)}</b>`); return; }
-      U.list = (await uapi(`/api/users/${encodeURIComponent(name)}`, "DELETE")).users;
+      setUsers(await uapi(`/api/users/${encodeURIComponent(name)}`, "DELETE"));
       U.confirm = null; drawUsers(); umsg(`已删除 <b>${esc(name)}</b>`);
     }
   } catch (err) { U.confirm = null; drawUsers(); umsg(esc(err.message), true); }
 };
+$("#ua-role").onchange = () => { $("#ua-mags").disabled = $("#ua-role").value === "admin"; };
 $("#ua-gen").onclick = () => { $("#ua-pass").value = genPassword(); };
 $("#ua-add").onclick = async () => {
   const name = $("#ua-name").value.trim(), pw = $("#ua-pass").value || genPassword(), role = $("#ua-role").value;
+  const scope = $("#ua-mags").value, mags = role === "admin" || !scope ? null : [scope];
   if (!name) { umsg("请填写用户名", true); $("#ua-name").focus(); return; }
   try {
-    U.list = (await uapi("/api/users", "POST", { name, password: pw, role })).users;
+    setUsers(await uapi("/api/users", "POST", { name, password: pw, role, mags }));
     U.confirm = null; drawUsers(); showSecret(name, pw, `已创建${ROLE_ZH[role]}，`);
     $("#ua-name").value = ""; $("#ua-pass").value = "";
   } catch (err) { umsg(esc(err.message), true); }

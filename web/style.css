@@ -181,21 +181,24 @@ dialog small { color: var(--ink3); font-weight: 400; }
 #users { width: min(620px, 92vw); }
 #users h3 { margin: 16px 0 6px; font-size: 14px; }
 #users-table { max-height: 45vh; overflow: auto; border: 1px solid var(--line); border-radius: 6px; }
-.ur { display: grid; grid-template-columns: 1fr 90px auto auto; gap: 6px; align-items: center; padding: 6px 8px; border-bottom: 1px solid var(--line); }
+.ur { display: grid; grid-template-columns: 1fr 80px minmax(0, 150px) auto auto; gap: 6px; align-items: center; padding: 6px 8px; border-bottom: 1px solid var(--line); }
 .ur:last-child { border-bottom: 0; }
 .ur .un { font-size: 13.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ur select, .uadd select, .uadd input { font-size: 13px; padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--ink); min-width: 0; }
 .ur button, .uadd button { font-size: 12.5px; }
 .ur button.danger { background: #c62828; border-color: #c62828; color: #fff; }
 .ur button:disabled, .ur select:disabled { opacity: .45; cursor: not-allowed; }
-.uadd { display: grid; grid-template-columns: 1fr 1.3fr auto 84px auto; gap: 6px; }
+.uadd { display: grid; grid-template-columns: 1fr 1.3fr auto; gap: 6px; }
+.uadd #ua-role { grid-column: 1; } .uadd #ua-mags { grid-column: 2; } .uadd #ua-add { grid-column: 3; }
 .umsg { min-height: 1.4em; margin-top: 10px; font-size: 13px; color: var(--ink2); display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .umsg.err { color: #c62828; }
 .umsg code.secret { font-size: 14px; padding: 2px 8px; border-radius: 4px; background: var(--bg); border: 1px solid var(--line); user-select: all; letter-spacing: .5px; }
 @media (max-width: 640px) {
-  .uadd { grid-template-columns: 1fr auto; }
-  .uadd #ua-name, .uadd #ua-pass { grid-column: 1 / -1; }
+  .uadd { grid-template-columns: 1fr auto; grid-auto-flow: dense; }
+  .uadd #ua-name, .uadd #ua-mags { grid-column: 1 / -1; }
+  .uadd #ua-pass, .uadd #ua-role { grid-column: 1; } .uadd #ua-gen, .uadd #ua-add { grid-column: 2; }
   .ur { grid-template-columns: 1fr 80px; }
+  .ur select[data-act="mags"] { grid-column: 1 / -1; }
 }
 .grow { flex: 1; }
 

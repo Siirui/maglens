@@ -4,6 +4,8 @@
     python -m maglens.users add friend                  # reader by default
     python -m maglens.users passwd friend
     python -m maglens.users remove friend
+    python -m maglens.users scope trial 387f45a7acf6    # reader may only open these issue ids
+    python -m maglens.users scope trial                 # every issue again
     python -m maglens.users list
 """
 from __future__ import annotations
@@ -39,7 +41,10 @@ def main(argv=None):
     p.add_argument("name")
     r = sub.add_parser("remove", help="删除账号")
     r.add_argument("name")
-    sub.add_parser("list", help="列出账号")
+    s = sub.add_parser("scope", help="限定读者能看的杂志（不填 id 就是全部）")
+    s.add_argument("name")
+    s.add_argument("mags", nargs="*", help="杂志 id（list 里能看到）")
+    sub.add_parser("list", help="列出账号和杂志 id")
     args = ap.parse_args(argv)
 
     cfg = load_config(data_dir=args.data_dir)
@@ -50,15 +55,26 @@ def main(argv=None):
     elif args.cmd == "passwd":
         if args.name not in auth.users:
             sys.exit(f"没有这个账号：{args.name}")
-        auth.set_user(args.name, _ask_password(), auth.users[args.name]["role"])
+        u = auth.users[args.name]
+        auth.set_user(args.name, _ask_password(), u["role"], u.get("mags"))
         print("密码已更新")
     elif args.cmd == "remove":
         print("已删除" if auth.remove_user(args.name) else f"没有这个账号：{args.name}")
+    elif args.cmd == "scope":
+        if args.name not in auth.users:
+            sys.exit(f"没有这个账号：{args.name}")
+        auth.set_mags(args.name, args.mags or None)
+        print(f"{args.name} 可以看：{' '.join(args.mags) if args.mags else '全部'}")
     else:
         if not auth.users:
             print("还没有账号（未启用登录，本地访问时所有人都是管理员）")
         for u in auth.users.values():
-            print(f"{u['name']}\t{u['role']}")
+            print(f"{u['name']}\t{u['role']}\t{' '.join(u['mags']) if u.get('mags') else '全部'}")
+        if cfg.db_path.exists():
+            from .store import Store
+            print("\n杂志 id：")
+            for m in Store(cfg.db_path).magazines():
+                print(f"  {m['id']}\t{m['title']}")
 
 
 if __name__ == "__main__":

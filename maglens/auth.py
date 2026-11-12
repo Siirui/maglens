@@ -2,7 +2,10 @@
 
 Accounts live in <data_dir>/auth.json (never in config.toml, which is checked in):
 
-    {"secret": "<random hex>", "users": [{"name": "siri", "hash": "scrypt$...", "role": "admin"}]}
+    {"secret": "<random hex>", "users": [{"name": "siri", "hash": "scrypt$...", "role": "admin"},
+                                         {"name": "trial", "hash": "...", "role": "reader", "mags": ["<mag id>"]}]}
+
+`mags` (optional) limits a reader to those issues; missing means every issue. Admins ignore it.
 
 No auth.json -> auth is off and every request is treated as the local admin (the old behaviour).
 Manage accounts with `python -m maglens.users`.
@@ -54,19 +57,33 @@ class Auth:
         self.path = path
         self.secret = b""
         self.users: dict[str, dict] = {}
+        self._mtime: int | None = None
         self.reload()
 
     @property
     def enabled(self) -> bool:
         return bool(self.users)
 
+    def _stat(self) -> int | None:
+        try:
+            return self.path.stat().st_mtime_ns
+        except FileNotFoundError:
+            return None
+
+    def refresh(self):
+        """Pick up edits made by another process (e.g. `maglens.users` on the server); one stat() call."""
+        if self._stat() != self._mtime:
+            self.reload()
+
     def reload(self):
-        if not self.path.exists():
+        mtime = self._stat()
+        if mtime is None:
             self.secret, self.users = b"", {}
-            return
-        raw = json.loads(self.path.read_text(encoding="utf-8"))
-        self.secret = bytes.fromhex(raw["secret"])
-        self.users = {u["name"]: u for u in raw.get("users", [])}
+        else:
+            raw = json.loads(self.path.read_text(encoding="utf-8"))
+            self.secret = bytes.fromhex(raw["secret"])
+            self.users = {u["name"]: u for u in raw.get("users", [])}
+        self._mtime = mtime  # last, so a concurrent refresh() never skips a reload it still needs
 
     def save(self):
         if not self.secret:
@@ -77,13 +94,32 @@ class Auth:
         tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
         tmp.chmod(0o600)
         tmp.replace(self.path)
+        self._mtime = self._stat()
 
     # accounts --------------------------------------------------------------
-    def set_user(self, name: str, password: str, role: str):
+    def set_user(self, name: str, password: str, role: str, mags: list[str] | None = None):
         if role not in ROLES:
             raise ValueError(f"role must be one of {ROLES}")
         self.users[name] = {"name": name, "hash": hash_password(password), "role": role}
+        if mags is not None:
+            self.users[name]["mags"] = list(mags)
         self.save()
+
+    def set_mags(self, name: str, mags: list[str] | None):
+        """None = every issue."""
+        u = self.users[name]
+        if mags is None:
+            u.pop("mags", None)
+        else:
+            u["mags"] = list(mags)
+        self.save()
+
+    @staticmethod
+    def public(u: dict) -> dict:
+        out = {"name": u["name"], "role": u["role"]}
+        if u.get("mags") is not None:
+            out["mags"] = list(u["mags"])
+        return out
 
     def remove_user(self, name: str) -> bool:
         if self.users.pop(name, None) is None:
@@ -94,7 +130,7 @@ class Auth:
     def check_login(self, name: str, password: str) -> dict | None:
         u = self.users.get(name)
         if u and verify_password(password, u["hash"]):
-            return {"name": u["name"], "role": u["role"]}
+            return self.public(u)
         verify_password(password, hash_password("x"))  # same cost for unknown users
         return None
 
@@ -111,7 +147,8 @@ class Auth:
         return f"{body}.{sig}"
 
     def read_token(self, token: str | None) -> dict | None:
-        """Valid, unexpired token for a user that still exists -> {name, role} (role read fresh)."""
+        """Valid, unexpired token for a user that still exists -> {name, role[, mags]} (read fresh)."""
+        self.refresh()
         if not token or "." not in token or not self.secret:
             return None
         body, sig = token.rsplit(".", 1)
@@ -125,4 +162,4 @@ class Auth:
         u = self.users.get(data.get("u"))
         if not u or data.get("exp", 0) < time.time() or data.get("v") != self._ver(u):
             return None
-        return {"name": u["name"], "role": u["role"]}
+        return self.public(u)

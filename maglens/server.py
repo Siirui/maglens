@@ -109,6 +109,11 @@ def create_app(cfg: Config, engine=None) -> FastAPI:
     def is_admin(request: Request) -> bool:
         return (request.state.user or {}).get("role") == "admin"
 
+    def can_see(request: Request, mag_id: str) -> bool:
+        """Readers can be limited to some issues (auth.json `mags`); admins see everything."""
+        user = request.state.user or {}
+        return user.get("role") == "admin" or user.get("mags") is None or mag_id in user["mags"]
+
     @app.get("/api/me")
     def me(request: Request):
         # model: can this server translate? (--manual / published deployments can't)
@@ -149,7 +154,17 @@ def create_app(cfg: Config, engine=None) -> FastAPI:
         return request.state.user["name"]
 
     def account_list():
-        return {"users": [{"name": u["name"], "role": u["role"]} for u in auth.users.values()]}
+        return {"users": [Auth.public(u) for u in auth.users.values()],
+                "magazines": [{"id": m["id"], "title": m["title"], "series": m["series"]}
+                              for m in store.magazines()]}
+
+    def check_mags(mags: list[str] | None, role: str) -> list[str] | None:
+        if mags is None or role == "admin":
+            return None
+        known = {m["id"] for m in store.magazines()}
+        if not mags or not all(isinstance(x, str) and x in known for x in mags):
+            raise HTTPException(400, "请选择要开放的杂志")
+        return sorted(set(mags))
 
     def check_password(pw: str):
         if len(pw) < MIN_PASSWORD:
@@ -166,7 +181,8 @@ def create_app(cfg: Config, engine=None) -> FastAPI:
         return account_list()
 
     @app.post("/api/users")
-    def users_add(request: Request, name: str = Body(...), password: str = Body(...), role: str = Body("reader")):
+    def users_add(request: Request, name: str = Body(...), password: str = Body(...), role: str = Body("reader"),
+                  mags: list[str] | None = Body(None)):
         accounts(request)
         name = name.strip()
         if not USERNAME.fullmatch(name):
@@ -176,7 +192,7 @@ def create_app(cfg: Config, engine=None) -> FastAPI:
         if role not in ROLES:
             raise HTTPException(400, "角色只能是 reader 或 admin")
         check_password(password)
-        auth.set_user(name, password, role)
+        auth.set_user(name, password, role, check_mags(mags, role))
         return account_list()
 
     @app.post("/api/users/{name}/password")
@@ -184,7 +200,7 @@ def create_app(cfg: Config, engine=None) -> FastAPI:
         me_name = accounts(request)
         u = existing(name)
         check_password(password)
-        auth.set_user(name, password, u["role"])  # also logs out that user's existing sessions
+        auth.set_user(name, password, u["role"], u.get("mags"))  # also logs out that user's existing sessions
         resp = JSONResponse(account_list())
         if name == me_name:  # keep the admin who changed their own password logged in
             resp.set_cookie(COOKIE, auth.make_token(u), max_age=SESSION_DAYS * 86400, httponly=True,
@@ -200,7 +216,18 @@ def create_app(cfg: Config, engine=None) -> FastAPI:
         if name == me_name and role != "admin":
             raise HTTPException(400, "不能取消自己的管理员身份")
         u["role"] = role
+        if role == "admin":
+            u.pop("mags", None)
         auth.save()
+        return account_list()
+
+    @app.post("/api/users/{name}/mags")
+    def users_mags(name: str, request: Request, mags: list[str] | None = Body(..., embed=True)):
+        accounts(request)
+        u = existing(name)
+        if u["role"] == "admin":
+            raise HTTPException(400, "管理员可以看所有杂志")
+        auth.set_mags(name, check_mags(mags, u["role"]))
         return account_list()
 
     @app.delete("/api/users/{name}")
@@ -219,7 +246,7 @@ def create_app(cfg: Config, engine=None) -> FastAPI:
             raise HTTPException(404, "magazine not found")
         if request is not None and not is_admin(request):
             info = next((x for x in store.magazines() if x["id"] == mag_id), None)
-            if not info or not available(info):
+            if not info or not available(info) or not can_see(request, mag_id):
                 raise HTTPException(404, "magazine not available yet")
         return m
 
@@ -232,7 +259,7 @@ def create_app(cfg: Config, engine=None) -> FastAPI:
         mags = [{**m, "cover": covers.get(m["id"], 0)} for m in store.magazines()]
         if is_admin(request):
             return [{**m, "available": available(m)} for m in mags]
-        out = [reader_mag(m) for m in mags]
+        out = [reader_mag(m) for m in mags if can_see(request, m["id"])]
         return out if cfg.reader_show_incomplete else [m for m in out if m["available"]]
 
     @app.get("/api/library")

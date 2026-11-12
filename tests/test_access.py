@@ -262,3 +262,43 @@ def test_account_api_off_without_accounts(libdir, tmp_path):
     assert c.get("/api/users").status_code == 409
     assert c.post("/api/users", json={"name": "x", "password": "12345678"}).status_code == 409
     assert not (tmp_path / "auth.json").exists()
+
+
+def test_reader_limited_to_some_issues(libdir, tmp_path):
+    """Friends see everything; a public trial account (e.g. posted on 小红书) only sees one issue."""
+    app, store = make_app(libdir, tmp_path, users=[("boss", "admin"), ("friend", "reader"), ("trial", "reader")],
+                          translate=("1月", "2月"))
+    jan, feb = ids(store)
+    Auth(tmp_path / "auth.json").set_mags("trial", [jan])
+    admin, friend, trial = TestClient(app), TestClient(app), TestClient(app)
+    for c, n in ((admin, "boss"), (friend, "friend"), (trial, "trial")):
+        login(c, n)
+    shelf = lambda c: {m["id"] for m in c.get("/api/library").json()["magazines"]}
+
+    assert shelf(friend) == {jan, feb} and shelf(admin) == {jan, feb}
+    assert shelf(trial) == {jan}
+    assert {m["id"] for m in trial.get("/api/progress").json()["magazines"]} == {jan}
+    assert trial.get(f"/api/mag/{jan}").status_code == 200
+    for path in (f"/api/mag/{feb}", f"/api/mag/{feb}/page/0", f"/api/mag/{feb}/page/0.png"):
+        assert trial.get(path).status_code == 404, path            # hidden, not just "forbidden"
+        assert friend.get(path).status_code == 200, path
+
+    # admin changes the scope from the web; it survives a password reset
+    users = lambda r: {u["name"]: u.get("mags") for u in r.json()["users"]}
+    r = admin.get("/api/users")
+    assert users(r)["trial"] == [jan] and {m["id"] for m in r.json()["magazines"]} == {jan, feb}
+    assert trial.post("/api/users/trial/mags", json={"mags": None}).status_code == 403
+    assert admin.post("/api/users/trial/mags", json={"mags": ["nope"]}).status_code == 400
+    assert admin.post("/api/users/trial/mags", json={"mags": []}).status_code == 400
+    assert admin.post("/api/users/boss/mags", json={"mags": [jan]}).status_code == 400
+    assert users(admin.post("/api/users/trial/mags", json={"mags": [feb]}))["trial"] == [feb]
+    assert shelf(trial) == {feb}                                       # applies to the live session
+    assert users(admin.post("/api/users/trial/password", json={"password": "trial-pw-2"}))["trial"] == [feb]
+    assert users(admin.post("/api/users/trial/mags", json={"mags": None}))["trial"] is None
+
+    # creating a limited account directly
+    r = admin.post("/api/users", json={"name": "xhs", "password": "secret-123", "mags": [jan]})
+    assert r.status_code == 200 and users(r)["xhs"] == [jan]
+    xhs = TestClient(app)
+    assert xhs.post("/api/login", json={"name": "xhs", "password": "secret-123"}).status_code == 200
+    assert shelf(xhs) == {jan}
