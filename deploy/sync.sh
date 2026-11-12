@@ -21,7 +21,7 @@ else .venv/bin/python -m maglens.publish --out "$OUT"; fi
 
 echo "== 上传代码"
 rsync -az --delete --rsync-path "sudo -u maglens rsync" \
-  --exclude .git --exclude .venv --exclude __pycache__ --exclude .pytest_cache --exclude tests \
+  --exclude .git --exclude .venv --exclude __pycache__ --exclude .pytest_cache --exclude tests --exclude '*.pdf' --exclude .DS_Store \
   ./ "$HOST:$APP/"
 ssh "$HOST" "sudo -u maglens $APP/.venv/bin/pip install -q -r $APP/requirements.txt"
 

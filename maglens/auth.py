@@ -99,8 +99,14 @@ class Auth:
         return None
 
     # sessions --------------------------------------------------------------
+    @staticmethod
+    def _ver(u: dict) -> str:
+        """Changes whenever the password changes, so resetting a password logs out old sessions."""
+        return hashlib.sha256(u["hash"].encode()).hexdigest()[:12]
+
     def make_token(self, user: dict, days: int = SESSION_DAYS) -> str:
-        body = _b64(json.dumps({"u": user["name"], "exp": int(time.time()) + days * 86400}).encode())
+        u = self.users[user["name"]]
+        body = _b64(json.dumps({"u": u["name"], "v": self._ver(u), "exp": int(time.time()) + days * 86400}).encode())
         sig = _b64(hmac.new(self.secret, body.encode(), hashlib.sha256).digest())
         return f"{body}.{sig}"
 
@@ -117,6 +123,6 @@ class Auth:
         except ValueError:
             return None
         u = self.users.get(data.get("u"))
-        if not u or data.get("exp", 0) < time.time():
+        if not u or data.get("exp", 0) < time.time() or data.get("v") != self._ver(u):
             return None
         return {"name": u["name"], "role": u["role"]}

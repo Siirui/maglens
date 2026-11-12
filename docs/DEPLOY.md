@@ -15,8 +15,19 @@
 - **读者端交互全部保留**：悬浮联动框选（基于同步过去的 `bbox`）、中文/对照/原文切换、跨页、缩放、翻页。本机框选补漏的 `supplement` 块会随下次同步上线。
 - 暂不上 CDN/R2：页面图需要登录才能访问，公共 CDN 会绕过鉴权；按估算的流量，一台香港轻量服务器足够。
 
+## 现在的线上环境（2026-11-12 上线）
+| 项目 | 情况 |
+|---|---|
+| 网址 | https://maglens.net（Cloudflare 注册，A 记录「仅 DNS」，灰色云朵） |
+| 服务器 | 阿里云轻量应用服务器**吉隆坡**，**通用型**（不是国际型），2 vCPU / 1 GiB / 30 GiB，200Mbps 峰值，$5/月；加了 2G swap |
+| 系统 | **Alibaba Cloud Linux 4**（dnf），不是 Ubuntu；登录用户 `admin`（免密 sudo） |
+| HTTPS | Caddy v2.11.9，GitHub 官方二进制（校验过 SHA-512）+ 手写的 `/etc/systemd/system/caddy.service`；Let's Encrypt 证书自动续期 |
+| 同步 | `deploy/sync.sh admin@<服务器IP>` |
+
+**`deploy/setup.sh` 只支持 Ubuntu**（第一步用 `apt-get`），这台机器是照着它的步骤手动部署的。如果以后要在 Alibaba Cloud Linux / CentOS 上重装，第 1 步改成：`dnf install -y rsync tar`，再从 [Caddy 的 GitHub 发布页](https://github.com/caddyserver/caddy/releases) 下载二进制装到 `/usr/bin/caddy`，并建好 `caddy` 用户和 systemd 服务。其余步骤相同。
+
 ## 0. 准备
-- **服务器**：腾讯云或阿里云的**香港**轻量应用服务器，2 核 2G 或 4G，系统盘 40G 以上，Ubuntu 22.04/24.04，约 ¥30–60/月。放在香港不需要 ICP 备案。
+- **服务器**：轻量应用服务器，2 核、1G 以上内存（1G 时加 2G swap），系统盘 30G 以上，约 ¥30–60/月。放在境外不需要 ICP 备案。读者在大陆，所以**一定选通用型，不要选国际型**（国际型的线路没有针对大陆优化），机房以大陆晚高峰实测为准。
 - **域名**：推荐 Cloudflare Registrar / Porkbun / Namecheap（按成本价，不需要国内实名），`.com` 约 $10/年。添加一条 A 记录指向服务器 IP，例如 `mag.example.com`。如果 DNS 托管在 Cloudflare，**代理开关要关掉（灰色云朵，仅 DNS）**：橙色代理会让大陆访问绕路变慢。
 - **防火墙**：只放行 22、80、443。
 
@@ -34,10 +45,17 @@ deploy/setup.sh ubuntu@你的服务器IP mag.example.com
 
 > 保险：服务器还没有任何账号时，所有经过 Caddy 进来的请求都会被拒绝（403），不会把管理员权限漏给外人。
 
-## 2. 加朋友的账号（在服务器上）
+## 2. 加朋友的账号（网页上）
+用管理员账号登录网站，点右上角用户名旁边的 **「账号」**：
+- **新建**：填用户名，密码可以自己填，也可以点「随机」生成；选择读者或管理员，点「创建」。密码只显示这一次，点「复制账号和密码」，会把网址、用户名和密码一起复制，直接发给朋友。
+- **重置密码**：生成一个新的随机密码，对方在所有设备上都会被退出登录。
+- **改角色 / 删除**：删除要点两次确认。不能删除自己，也不能取消自己的管理员身份，所以至少总有一个管理员。
+
+命令行仍然可用（比如忘了管理员密码时）：
 ```bash
-ssh -t ubuntu@服务器IP 'cd /opt/maglens/app && sudo -u maglens .venv/bin/python -m maglens.users --data-dir /opt/maglens/data add 朋友A'
+ssh -t admin@服务器IP 'sudo -u maglens env -C /opt/maglens/app .venv/bin/python -m maglens.users --data-dir /opt/maglens/data passwd 名字'
 ```
+`/opt/maglens` 只有 maglens 用户能进入，所以要用 `env -C` 切换目录，不能先 `cd` 再 `sudo`。
 - 读者：只能看已经翻完的杂志；没有「重译」「框选识别」「术语表」「导出」，也看不到花费和进度。
 - 管理员：服务器上没有模型，所以「重译」「框选识别」在线上会自动隐藏。
 - 账号保存在 `data/auth.json`，同步时不会被覆盖。改密码用 `passwd`，删账号用 `remove`，列出账号用 `list`。
@@ -59,7 +77,7 @@ deploy/sync.sh ubuntu@你的服务器IP 2026.12       # 只导出新的一期（
 ## 成本（每月）
 | 项目 | 费用 |
 |---|---|
-| 香港轻量服务器（自带每月 1TB 左右流量） | ¥30–60 |
+| 轻量服务器（现在是阿里云吉隆坡 $5/月） | ¥30–60 |
 | 域名（按年摊） | ≈ ¥4 |
 | 翻译（本机用 Claude 订阅额度，按标价折算） | 每期约 $2–4 |
 
@@ -71,7 +89,10 @@ deploy/sync.sh ubuntu@你的服务器IP 2026.12       # 只导出新的一期（
 
 ## 待办
 - [x] **前端预加载后续页面图片（优先做）**：现在 `web/app.js` 只在翻到某一页时才请求这一页的图，线路一般时每次翻页都要等。改成看当前页时，后台用 `new Image()` 预取后面 1–2 页（单页模式按页、跨页模式按跨页；翻页方向跟 `S.rtl` 走），宽度和当前选的 1600/2400 档一致，这样能命中浏览器缓存。不涉及模型，读者端也生效。服务器已经返回 `Cache-Control: max-age=86400`，不用改后端。
-- [ ] 选机房：读者在大陆，选型以大陆的晚高峰实测为准（在 [itdog.cn](https://www.itdog.cn/ping/) 用全国电信/联通/移动节点 ping，例如 `oss-ap-southeast-1.aliyuncs.com`）。从美国测的结果代表不了大陆。候选是腾讯云轻量香港（2 核 2G / 40GB / 20Mbps / 0.5TB，38 元/月），或者阿里云东南亚**通用型**（不要选国际型：线路没有针对大陆优化）。腾讯云 Ubuntu 镜像的默认用户是 `ubuntu`。
+- [x] 选机房：阿里云吉隆坡通用型（itdog 实测可以）。还差一步：**上线后请国内的朋友在晚上 8–11 点翻十几页**，确认晚高峰不卡。如果卡，备选是腾讯云轻量香港（2 核 2G / 40GB / 20Mbps / 0.5TB，38 元/月）。
+- [x] 网页端账号管理（管理员点右上角「账号」）。
+- [ ] `deploy/setup.sh` 支持 dnf 系统（Alibaba Cloud Linux / CentOS），或者在开头检测到不是 apt 时直接报错说明。
+- [ ] `maglens.publish` 不能两个进程同时跑：临时文件名固定是 `xxx.tmp`，同时渲染同一页时会互相覆盖并报错（2026-11-11 本机两个 session 同时导出时出现过）。改成带进程号的临时文件名，或者加一个导出锁。
 
 ### 可选
 - [x] 只读模式（`--manual`）下隐藏「框选识别」「重译」按钮和快捷键 R，免得用管理员登录线上时点了没反应。

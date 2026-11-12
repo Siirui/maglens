@@ -13,8 +13,10 @@ function setUser(user, auth, model = ME.model) {
   document.documentElement.classList.toggle("role-reader", !isAdmin());
   document.documentElement.classList.toggle("no-model", !ME.model);
   $("#user").innerHTML = auth && user
-    ? `<span class="uname">${esc(user.name)}</span><button id="logout" title="退出登录">退出</button>` : "";
+    ? `<span class="uname">${esc(user.name)}</span>` + (isAdmin() ? `<button id="btn-users" title="新建、删除账号，重置密码">账号</button>` : "")
+      + `<button id="logout" title="退出登录">退出</button>` : "";
   if ($("#logout")) $("#logout").onclick = async () => { await fetch("/api/logout", { method: "POST" }); location.href = "/login.html"; };
+  if ($("#btn-users")) $("#btn-users").onclick = openUsers;
 }
 const esc = s => (s || "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const store = {
@@ -406,7 +408,7 @@ $("#prev").onclick = () => go(S.rtl ? 1 : -1);
 $("#next").onclick = () => go(S.rtl ? -1 : 1);
 $("#pageinput").onchange = e => { location.hash = `#/m/${S.mag.id}/${clampPage(+e.target.value - 1) + 1}`; };
 document.addEventListener("keydown", e => {
-  if ($("#reader").hidden || e.target.tagName === "INPUT" || $("#gloss").open) return;
+  if ($("#reader").hidden || e.target.tagName === "INPUT" || $("#gloss").open || $("#users").open) return;
   if (e.key === "ArrowLeft") go(S.rtl ? 1 : -1);
   else if (e.key === "ArrowRight") go(S.rtl ? -1 : 1);
   else if (e.key === "s") $("#btn-spread").click();
@@ -451,6 +453,86 @@ $("#gloss-save").onclick = async () => {
     headers: { "Content-Type": "application/json" }, body: JSON.stringify({ terms: gloss }) });
   $("#gloss").close(); $("#status").textContent = "术语表已保存（之后翻译的页面生效；已翻的页可点「重译」）";
 };
+
+// ---------------------------------------------------------------- accounts (admin)
+const U = { list: [], confirm: null };
+const ROLE_ZH = { reader: "读者", admin: "管理员" };
+// like api(), but surfaces the server's error message (e.g. "账号已存在") instead of just the status
+async function uapi(p, method = "GET", body) {
+  const r = await fetch(p, { method, headers: body ? { "Content-Type": "application/json" } : {},
+    body: body ? JSON.stringify(body) : undefined });
+  if (r.status === 401) { location.href = "/login.html"; throw new Error("login required"); }
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(typeof j.detail === "string" ? j.detail : `出错了（${r.status}）`);
+  return j;
+}
+function genPassword() {
+  const abc = "abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789";  // no 0/O, 1/l/I
+  const b = crypto.getRandomValues(new Uint8Array(12));
+  return Array.from(b, x => abc[x % abc.length]).join("");
+}
+function umsg(html, err = false) { const m = $("#users-msg"); m.innerHTML = html; m.classList.toggle("err", err); }
+function showSecret(name, pw, what) {
+  umsg(`${what}<b>${esc(name)}</b> 的密码：<code class="secret">${esc(pw)}</code>
+    <button type="button" id="u-copy">复制账号和密码</button>`);
+  $("#u-copy").onclick = async () => {
+    try { await navigator.clipboard.writeText(`${location.origin}\n用户名：${name}\n密码：${pw}`); $("#u-copy").textContent = "已复制"; }
+    catch { $("#u-copy").textContent = "复制失败，请手动选中"; }
+  };
+}
+async function openUsers() {
+  U.confirm = null; umsg("");
+  $("#ua-name").value = ""; $("#ua-pass").value = ""; $("#ua-role").value = "reader";
+  $("#users").showModal();
+  try { U.list = (await uapi("/api/users")).users; drawUsers(); } catch (e) { umsg(esc(e.message), true); }
+}
+function drawUsers() {
+  const me = ME.user?.name;
+  $("#users-table").innerHTML = U.list.map(u => {
+    const self = u.name === me, c = U.confirm === u.name;
+    return `<div class="ur" data-name="${esc(u.name)}">
+      <span class="un">${esc(u.name)}${self ? ' <small>（你）</small>' : ""}</span>
+      <select data-act="role" ${self ? "disabled title='不能取消自己的管理员身份'" : ""}>
+        ${Object.entries(ROLE_ZH).map(([k, v]) => `<option value="${k}" ${k === u.role ? "selected" : ""}>${v}</option>`).join("")}
+      </select>
+      <button type="button" data-act="reset">重置密码</button>
+      <button type="button" data-act="del" class="${c ? "danger" : ""}" ${self ? "disabled title='不能删除自己'" : ""}>${c ? "确认删除" : "删除"}</button>
+    </div>`;
+  }).join("") || `<div class="empty">还没有账号。</div>`;
+}
+$("#users-table").onchange = async e => {
+  if (e.target.dataset.act !== "role") return;
+  const name = e.target.closest(".ur").dataset.name;
+  try { U.list = (await uapi(`/api/users/${encodeURIComponent(name)}/role`, "POST", { role: e.target.value })).users;
+    drawUsers(); umsg(`已把 <b>${esc(name)}</b> 改成${ROLE_ZH[e.target.value]}`); }
+  catch (err) { drawUsers(); umsg(esc(err.message), true); }
+};
+$("#users-table").onclick = async e => {
+  const act = e.target.dataset.act; if (!act || act === "role") return;
+  const name = e.target.closest(".ur").dataset.name;
+  try {
+    if (act === "reset") {
+      const pw = genPassword();
+      U.list = (await uapi(`/api/users/${encodeURIComponent(name)}/password`, "POST", { password: pw })).users;
+      U.confirm = null; drawUsers(); showSecret(name, pw, "已重置，");
+    } else if (act === "del") {
+      if (U.confirm !== name) { U.confirm = name; drawUsers(); umsg(`再点一次「确认删除」删除 <b>${esc(name)}</b>`); return; }
+      U.list = (await uapi(`/api/users/${encodeURIComponent(name)}`, "DELETE")).users;
+      U.confirm = null; drawUsers(); umsg(`已删除 <b>${esc(name)}</b>`);
+    }
+  } catch (err) { U.confirm = null; drawUsers(); umsg(esc(err.message), true); }
+};
+$("#ua-gen").onclick = () => { $("#ua-pass").value = genPassword(); };
+$("#ua-add").onclick = async () => {
+  const name = $("#ua-name").value.trim(), pw = $("#ua-pass").value || genPassword(), role = $("#ua-role").value;
+  if (!name) { umsg("请填写用户名", true); $("#ua-name").focus(); return; }
+  try {
+    U.list = (await uapi("/api/users", "POST", { name, password: pw, role })).users;
+    U.confirm = null; drawUsers(); showSecret(name, pw, `已创建${ROLE_ZH[role]}，`);
+    $("#ua-name").value = ""; $("#ua-pass").value = "";
+  } catch (err) { umsg(esc(err.message), true); }
+};
+$("#ua-name").onkeydown = $("#ua-pass").onkeydown = e => { if (e.key === "Enter") { e.preventDefault(); $("#ua-add").click(); } };
 
 // ---------------------------------------------------------------- progress + magazine switcher
 const P = { last: null };

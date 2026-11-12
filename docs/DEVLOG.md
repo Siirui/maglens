@@ -8,7 +8,8 @@
 | 杂志 PDF | `~/Magazines/2026`（12 本 POPEYE，其中 2 月号原本是 JPG 文件夹，已转成 PDF 放在 `~/.maglens/converted/`） |
 | 翻译数据 | `~/.maglens/maglens.sqlite3`：2,113 页里有 2,112 页翻好；4 月号第 145 页每次都被内容过滤拦下，只能看原图 |
 | 翻译花费 | Haiku，按标价折算约 $25，实际计入 Claude 订阅额度 |
-| 部署包 | `~/.maglens/dist`（12 本，1.07GB WebP + 精简数据库），还没上传；服务器还在选 |
+| 部署包 | `~/.maglens/dist`（12 本，1.07GB WebP + 精简数据库） |
+| 线上 | **https://maglens.net**（2026-11-12 上线）：阿里云吉隆坡轻量通用型，Alibaba Cloud Linux 4，`ssh admin@<服务器IP>`，同步用 `deploy/sync.sh admin@<服务器IP>`。详见 [DEPLOY.md](DEPLOY.md) 开头 |
 | 本机服务 | `python run.py --manual`（只读，不调用模型）→ http://127.0.0.1:8765/ |
 
 **需要备份的是本机**：`~/Magazines/2026` 和 `~/.maglens/maglens.sqlite3`。服务器上的东西都能从本机重新导出，唯一的例外是服务器上的 `auth.json`（账号）。
@@ -24,8 +25,7 @@ python run.py --manual
 deploy/setup.sh ubuntu@服务器IP 域名
 # 部署：以后每次新翻了杂志或改了代码
 deploy/sync.sh ubuntu@服务器IP
-# 加朋友的账号（在服务器上）
-python -m maglens.users --data-dir /opt/maglens/data add 名字
+# 加朋友的账号：管理员登录网站后点右上角「账号」
 ```
 完整部署步骤见 [DEPLOY.md](DEPLOY.md)。
 
@@ -58,13 +58,16 @@ python -m maglens.users --data-dir /opt/maglens/data add 名字
    - 每本自动找到真正的封面。
 6. **部署**：`publish` 导出、`setup.sh` 一条命令初始化服务器、`sync.sh` 增量同步；修好了 macOS rsync 参数、远端文件权限、反向代理识别这几个问题。
 7. **新视觉**：图标 A（红底、斜放的纸页、蓝色镜片）+ Dela Gothic 字标「MagLens」配片假名贴纸「マグレンズ」；首页改成街头风格：「继续阅读」黄卡片、按系列分区、封面加黑框和硬投影。
+8. **上线和网页端账号管理（2026-11-12）**：部署到 maglens.net；管理员在网页上新建、删除账号，重置密码，改角色。重置密码会让对方的旧会话失效（会话 token 里带了密码指纹，所以这次升级后所有人都要重新登录一次）；不能删除自己或取消自己的管理员身份；每次修改前都会重新读取 `auth.json`，所以和命令行同时用也不会互相覆盖。
 
 ## 已知问题
 
 - 4 月号第 145 页没有译文（内容过滤）。可以换 Sonnet 单独重试，也可以不管。
 - Haiku 的小毛病：个别术语音译（如 Nomex 写成「诺梅克斯」），页面类型标签常标错（已对读者隐藏）。之前的译注噪音已经在显示层过滤，提示词也改了，但已经翻好的数据没有重翻。
 - 「继续阅读」只记在当前浏览器里，换设备不同步。
-- `deploy/setup.sh` 没有在真服务器上跑过，第一次运行时要留意报错。
+- `deploy/setup.sh` 只支持 Ubuntu（`apt-get`）。线上那台是 Alibaba Cloud Linux 4，是照着脚本手动部署的，`sync.sh` 可以直接用。
+- `maglens.publish` 不能两个进程同时运行：临时文件名固定是 `xxx.tmp`，会互相覆盖并报错。导出时别同时跑两个（比如两个 Claude session 一个在导出、一个在 `sync.sh`）。
+- 部署时修掉的（2026-11-12）：上传代码时会把 `docs/` 里的样张 PDF 一起传上去，现在 `setup.sh`、`sync.sh` 都排除了 `*.pdf`；加账号的命令先 `cd` 再 `sudo -u maglens`，因为 `/opt/maglens` 只有 maglens 用户能进入而失败，改成 `sudo -u maglens env -C /opt/maglens/app …`。
 
 ## 下一步
 

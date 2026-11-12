@@ -30,7 +30,7 @@ REMOTE
 
 echo "== 2/5 上传代码、建虚拟环境"
 rsync -az --delete --rsync-path "sudo -u maglens rsync" \
-  --exclude .git --exclude .venv --exclude __pycache__ --exclude .pytest_cache --exclude tests \
+  --exclude .git --exclude .venv --exclude __pycache__ --exclude .pytest_cache --exclude tests --exclude '*.pdf' --exclude .DS_Store \
   ./ "$HOST:$APP/"
 ssh "$HOST" "sudo -u maglens bash -c 'cd $APP && [ -x .venv/bin/python ] || python3 -m venv .venv; .venv/bin/pip install -q -r requirements.txt'"
 
@@ -45,10 +45,10 @@ systemctl reload caddy || systemctl restart caddy
 REMOTE
 
 echo "== 4/5 设置管理员账号「$ADMIN」（想用别的名字：MAGLENS_ADMIN=名字 deploy/setup.sh ...）"
-if ssh "$HOST" "sudo -u maglens $APP/.venv/bin/python -m maglens.users --data-dir /opt/maglens/data list" | grep -q "^$ADMIN"$'\t'; then
-  echo "已存在，跳过（改密码：ssh -t $HOST sudo -u maglens $APP/.venv/bin/python -m maglens.users --data-dir /opt/maglens/data passwd $ADMIN）"
+if ssh "$HOST" "sudo -u maglens env -C $APP .venv/bin/python -m maglens.users --data-dir /opt/maglens/data list" | grep -q "^$ADMIN"$'\t'; then
+  echo "已存在，跳过（改密码：ssh -t $HOST sudo -u maglens env -C $APP .venv/bin/python -m maglens.users --data-dir /opt/maglens/data passwd $ADMIN）"
 else
-  ssh -t "$HOST" "cd $APP && sudo -u maglens .venv/bin/python -m maglens.users --data-dir /opt/maglens/data add '$ADMIN' --role admin"
+  ssh -t "$HOST" "sudo -u maglens env -C $APP .venv/bin/python -m maglens.users --data-dir /opt/maglens/data add '$ADMIN' --role admin"
 fi
 
 echo "== 5/5 导出并上传杂志、启动"
@@ -56,4 +56,4 @@ deploy/sync.sh "$HOST"
 
 echo
 echo "完成：https://$DOMAIN/"
-echo "加朋友的账号：ssh -t $HOST 'cd $APP && sudo -u maglens .venv/bin/python -m maglens.users --data-dir /opt/maglens/data add 朋友名字'"
+echo "加朋友的账号：ssh -t $HOST 'sudo -u maglens env -C $APP .venv/bin/python -m maglens.users --data-dir /opt/maglens/data add 朋友名字'"

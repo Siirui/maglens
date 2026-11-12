@@ -192,3 +192,73 @@ def test_login_rate_limit(libdir, tmp_path):
     assert r.status_code == 429 and "15 分钟" in r.json()["detail"]   # even the right password waits
     other = TestClient(app, client=("198.51.100.7", 5000))
     assert other.post("/api/login", json={"name": "amy", "password": "pw-amy"}).status_code == 200
+
+
+def test_password_change_logs_out_old_sessions(tmp_path):
+    a = Auth(tmp_path / "auth.json")
+    a.set_user("amy", "hunter22", "reader")
+    old = a.make_token({"name": "amy"})
+    a.set_user("amy", "hunter33", "reader")
+    assert a.read_token(old) is None
+    assert a.read_token(a.make_token({"name": "amy"})) == {"name": "amy", "role": "reader"}
+
+
+def test_admin_manages_accounts_from_web(libdir, tmp_path):
+    app, _ = make_app(libdir, tmp_path, users=[("boss", "admin"), ("amy", "reader")])
+    admin, reader, newbie = TestClient(app), TestClient(app), TestClient(app)
+    login(admin, "boss"), login(reader, "amy")
+    names = lambda r: {u["name"]: u["role"] for u in r.json()["users"]}
+
+    # readers can't see or touch accounts
+    assert reader.get("/api/users").status_code == 403
+    assert reader.post("/api/users", json={"name": "x", "password": "12345678"}).status_code == 403
+    assert reader.delete("/api/users/boss").status_code == 403
+    assert reader.post("/api/users/amy/role", json={"role": "admin"}).status_code == 403
+
+    assert names(admin.get("/api/users")) == {"boss": "admin", "amy": "reader"}
+    r = admin.post("/api/users", json={"name": "小明", "password": "secret-123"})
+    assert r.status_code == 200 and names(r)["小明"] == "reader"
+    assert newbie.post("/api/login", json={"name": "小明", "password": "secret-123"}).status_code == 200
+    assert newbie.get("/api/library").status_code == 200
+
+    # validation
+    assert admin.post("/api/users", json={"name": "小明", "password": "secret-123"}).status_code == 409
+    assert admin.post("/api/users", json={"name": "bad name", "password": "secret-123"}).status_code == 400
+    assert admin.post("/api/users", json={"name": "bo", "password": "short"}).status_code == 400
+    assert admin.post("/api/users", json={"name": "bo", "password": "secret-123", "role": "root"}).status_code == 400
+
+    # reset password: the old session is logged out, the new password works
+    assert admin.post("/api/users/小明/password", json={"password": "another-456"}).status_code == 200
+    assert newbie.get("/api/library").status_code == 401
+    assert newbie.post("/api/login", json={"name": "小明", "password": "another-456"}).status_code == 200
+
+    # role changes; an admin can't demote or delete themselves (so there is always an admin)
+    assert names(admin.post("/api/users/amy/role", json={"role": "admin"}))["amy"] == "admin"
+    assert admin.post("/api/users/boss/role", json={"role": "reader"}).status_code == 400
+    assert admin.delete("/api/users/boss").status_code == 400
+    assert admin.delete("/api/users/nobody").status_code == 404
+
+    # changing your own password keeps you logged in
+    assert admin.post("/api/users/boss/password", json={"password": "new-boss-pw"}).status_code == 200
+    assert admin.get("/api/users").status_code == 200
+
+    r = admin.delete("/api/users/小明")
+    assert r.status_code == 200 and "小明" not in names(r)
+    assert newbie.get("/api/library").status_code == 401
+
+
+def test_accounts_added_by_cli_while_running_are_kept(libdir, tmp_path):
+    app, _ = make_app(libdir, tmp_path, users=[("boss", "admin")])
+    admin = TestClient(app)
+    login(admin, "boss")
+    Auth(tmp_path / "auth.json").set_user("cli-added", "pw-cli-added", "reader")  # another process
+    assert admin.post("/api/users", json={"name": "web-added", "password": "secret-123"}).status_code == 200
+    assert set(Auth(tmp_path / "auth.json").users) == {"boss", "cli-added", "web-added"}
+
+
+def test_account_api_off_without_accounts(libdir, tmp_path):
+    app, _ = make_app(libdir, tmp_path)
+    c = TestClient(app)
+    assert c.get("/api/users").status_code == 409
+    assert c.post("/api/users", json={"name": "x", "password": "12345678"}).status_code == 409
+    assert not (tmp_path / "auth.json").exists()

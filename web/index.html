@@ -86,6 +86,26 @@
     </div>
   </form>
 </dialog>
+<dialog id="users">
+  <form method="dialog">
+    <h2>账号管理</h2>
+    <p class="hint">读者只能看已经翻完的杂志，看不到管理功能和花费。新账号的密码只在这里显示一次，复制后发给对方即可；重置密码会让对方在所有设备上退出登录。</p>
+    <div id="users-table"></div>
+    <h3>新建账号</h3>
+    <div class="uadd">
+      <input id="ua-name" placeholder="用户名" autocomplete="off" maxlength="32">
+      <input id="ua-pass" placeholder="密码（至少 8 位）" autocomplete="new-password">
+      <button type="button" id="ua-gen" title="生成一个随机密码">随机</button>
+      <select id="ua-role"><option value="reader">读者</option><option value="admin">管理员</option></select>
+      <button type="button" id="ua-add" class="primary">创建</button>
+    </div>
+    <div id="users-msg" class="umsg" role="status"></div>
+    <div class="row">
+      <span class="grow"></span>
+      <button value="cancel">关闭</button>
+    </div>
+  </form>
+</dialog>
 <script src="app.js"></script>
 </body>
 </html>

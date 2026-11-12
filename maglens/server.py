@@ -16,7 +16,7 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Red
 from fastapi.staticfiles import StaticFiles
 
 from . import library, render
-from .auth import COOKIE, SESSION_DAYS, Auth
+from .auth import COOKIE, ROLES, SESSION_DAYS, Auth
 from .config import ROOT, Config
 from .extract import make_engine
 from .jobs import Jobs
@@ -32,7 +32,12 @@ ADMIN_ONLY = [  # (method, path regex)
     ("GET", r"/api/glossary/.*"),
     ("PUT", r"/api/glossary/.*"),
     ("GET", r"/api/mag/[^/]+/export\.md"),
+    ("GET", r"/api/users"),
+    ("POST", r"/api/users(/.*)?"),
+    ("DELETE", r"/api/users/.*"),
 ]
+USERNAME = re.compile(r"[\w.\-]{1,32}")  # \w includes CJK, so Chinese names are fine
+MIN_PASSWORD = 8
 WIDTHS = (360, 1600, 2400)
 LOGIN_MAX_FAILURES, LOGIN_WINDOW = 10, 15 * 60  # per client IP
 
@@ -133,6 +138,79 @@ def create_app(cfg: Config, engine=None) -> FastAPI:
         resp = JSONResponse({"ok": True})
         resp.delete_cookie(COOKIE)
         return resp
+
+    # ------------------------------------------------------------------ accounts (admin only)
+    # Every handler re-reads auth.json first, so accounts added with `python -m maglens.users` while the
+    # server is running are neither invisible here nor overwritten by the next save.
+    def accounts(request: Request) -> str:
+        if not auth.enabled:
+            raise HTTPException(409, "本机没有启用账号，账号管理只在服务器上使用")
+        auth.reload()
+        return request.state.user["name"]
+
+    def account_list():
+        return {"users": [{"name": u["name"], "role": u["role"]} for u in auth.users.values()]}
+
+    def check_password(pw: str):
+        if len(pw) < MIN_PASSWORD:
+            raise HTTPException(400, f"密码至少 {MIN_PASSWORD} 位")
+
+    def existing(name: str) -> dict:
+        if name not in auth.users:
+            raise HTTPException(404, f"没有这个账号：{name}")
+        return auth.users[name]
+
+    @app.get("/api/users")
+    def users_list(request: Request):
+        accounts(request)
+        return account_list()
+
+    @app.post("/api/users")
+    def users_add(request: Request, name: str = Body(...), password: str = Body(...), role: str = Body("reader")):
+        accounts(request)
+        name = name.strip()
+        if not USERNAME.fullmatch(name):
+            raise HTTPException(400, "用户名 1–32 个字符，只能用中英文、数字和 . _ -")
+        if name in auth.users:
+            raise HTTPException(409, f"账号已存在：{name}")
+        if role not in ROLES:
+            raise HTTPException(400, "角色只能是 reader 或 admin")
+        check_password(password)
+        auth.set_user(name, password, role)
+        return account_list()
+
+    @app.post("/api/users/{name}/password")
+    def users_password(name: str, request: Request, password: str = Body(..., embed=True)):
+        me_name = accounts(request)
+        u = existing(name)
+        check_password(password)
+        auth.set_user(name, password, u["role"])  # also logs out that user's existing sessions
+        resp = JSONResponse(account_list())
+        if name == me_name:  # keep the admin who changed their own password logged in
+            resp.set_cookie(COOKIE, auth.make_token(u), max_age=SESSION_DAYS * 86400, httponly=True,
+                            samesite="lax", secure=request.url.scheme == "https")
+        return resp
+
+    @app.post("/api/users/{name}/role")
+    def users_role(name: str, request: Request, role: str = Body(..., embed=True)):
+        me_name = accounts(request)
+        u = existing(name)
+        if role not in ROLES:
+            raise HTTPException(400, "角色只能是 reader 或 admin")
+        if name == me_name and role != "admin":
+            raise HTTPException(400, "不能取消自己的管理员身份")
+        u["role"] = role
+        auth.save()
+        return account_list()
+
+    @app.delete("/api/users/{name}")
+    def users_remove(name: str, request: Request):
+        me_name = accounts(request)
+        existing(name)
+        if name == me_name:
+            raise HTTPException(400, "不能删除自己正在使用的账号")
+        auth.remove_user(name)
+        return account_list()
 
     # ------------------------------------------------------------------ library
     def mag_or_404(mag_id: str, request: Request | None = None) -> dict:
