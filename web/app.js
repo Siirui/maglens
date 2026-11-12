@@ -300,8 +300,8 @@ const pinched = () => (window.visualViewport?.scale || 1) > 1.01;  // panning a 
 // page past 22% of the width, or on a quick flick, and otherwise springs back.
 {
   const LOCK = 10, COMMIT = 0.22, FLICK = 0.35, LONGPRESS = 500;  // px, × stage width, px/ms, ms
-  const pages = $("#pages"), panel = $("#panel"), stage = $("#stage");
-  const still = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const panel = $("#panel"), stage = $("#stage"), calm = matchMedia("(prefers-reduced-motion: reduce)");
+  const still = () => calm.matches;
   const deltaOf = dx => dx > 0 ? (S.rtl ? 1 : -1) : (S.rtl ? -1 : 1);  // same as ←/→ and the ‹ › buttons
   const canGo = d => { const v = visiblePages(); return d > 0 ? posOf(v[v.length - 1]) < S.order.length - 1 : posOf(v[0]) > 0; };
   // flags kept on <html> so CSS can hand gestures back to the browser when the page is pinch-zoomed
@@ -309,13 +309,13 @@ const pinched = () => (window.visualViewport?.scale || 1) > 1.01;  // panning a 
   window.visualViewport?.addEventListener("resize", syncZoom);
   let g = null, busy = false;
   const move = (x, ms) => {
-    for (const el of [pages, panel]) {
+    for (const el of [stage, panel]) {
       el.style.transition = ms ? `transform ${ms}ms cubic-bezier(.2, .8, .2, 1)` : "none";
       el.style.transform = x ? `translateX(${x}px)` : "";
     }
   };
   const settle = (x, ms) => new Promise(res => { move(x, ms); setTimeout(res, ms); });
-  const reset = () => { for (const el of [pages, panel]) { el.style.transition = ""; el.style.transform = ""; el.style.opacity = ""; } };
+  const reset = () => { for (const el of [stage, panel]) { el.style.transition = ""; el.style.transform = ""; el.style.opacity = ""; } };
   // a horizontally scrollable box (wide table, textarea) keeps its own swipes
   const scrollsX = (el, root) => {
     for (; el && el !== root; el = el.parentElement)
@@ -350,11 +350,12 @@ const pinched = () => (window.visualViewport?.scale || 1) > 1.01;  // panning a 
     const x = canGo(deltaOf(g.dx)) ? g.dx : g.dx / (1 + Math.abs(g.dx) / (g.w * 0.25)) * 0.5;
     if (!still()) move(x, 0);
   }
-  async function end() {
+  async function end(e) {
     if (!g || g.lock !== "x") { g = null; return; }
     const { dx, w, v } = g; g = null;
     const [t0, x0] = v[0], [t1, x1] = v[v.length - 1];
-    const vel = t1 > t0 ? (x1 - x0) / (t1 - t0) : 0;  // px/ms over the last ~100ms
+    // px/ms over the last ~100ms of movement; a finger that rested before lifting has no speed left
+    const vel = t1 > t0 && e.timeStamp - t1 < 100 ? (x1 - x0) / (t1 - t0) : 0;
     const d = deltaOf(dx);
     const flick = Math.abs(vel) > FLICK && Math.abs(dx) > 24 && Math.sign(vel) === Math.sign(dx);
     const back = Math.sign(vel) === -Math.sign(dx) && Math.abs(vel) > 0.3;  // pulled back before letting go
@@ -366,20 +367,26 @@ const pinched = () => (window.visualViewport?.scale || 1) > 1.01;  // panning a 
     busy = true;
     const dir = Math.sign(dx);
     await settle(dir * w, 160);
-    // Clear the transform before render() runs: a page shifted sideways widens the stage's scrollable area,
-    // and fitPages() would then mark the stage .pannable. Hide it instead until the next page is in place.
+    // Hidden until the next page is in. (The whole stage moves, not #pages inside it: a shifted child would
+    // widen the stage's scrollable area, and a fitPages() during the drag would mark the stage .pannable.)
     reset();
-    for (const el of [pages, panel]) el.style.opacity = "0";
-    // the next page slides in from the other side once render() has swapped the content
-    const enter = () => {
-      move(-dir * w, 0);
-      for (const el of [pages, panel]) el.style.opacity = "";
-      requestAnimationFrame(() => requestAnimationFrame(async () => { await settle(0, 220); reset(); busy = false; }));
-    };
-    const timer = setTimeout(() => { removeEventListener("hashchange", onHash); reset(); busy = false; }, 1000);
-    const onHash = () => { clearTimeout(timer); setTimeout(enter, 0); };  // after route() has rendered
-    addEventListener("hashchange", onHash, { once: true });
+    for (const el of [stage, panel]) el.style.opacity = "0";
+    const before = location.hash;
     go(d);
+    const want = location.hash;  // set synchronously; route() renders on the hashchange that follows
+    if (want === before) { reset(); busy = false; return; }
+    const timer = setTimeout(() => { removeEventListener("hashchange", onHash); reset(); busy = false; }, 1000);
+    function onHash() {
+      clearTimeout(timer);
+      if (location.hash !== want) { reset(); busy = false; return; }  // some other navigation won the race
+      // the next page slides in from the other side once route() has rendered it
+      setTimeout(() => {
+        move(-dir * w, 0);
+        for (const el of [stage, panel]) el.style.opacity = "";
+        requestAnimationFrame(() => requestAnimationFrame(async () => { await settle(0, 220); reset(); busy = false; }));
+      }, 0);
+    }
+    addEventListener("hashchange", onHash, { once: true });
   }
   function cancel() {  // the browser took over (touchcancel) or a pinch started: spring back
     if (!g) return;
@@ -405,6 +412,7 @@ const pinched = () => (window.visualViewport?.scale || 1) > 1.01;  // panning a 
     hint = document.createElement("div");
     hint.id = "swipe-hint"; hint.setAttribute("aria-hidden", "true");
     hint.textContent = "← 左右滑动翻页 →";
+    hint.style.bottom = sheetLevels()[SHEET.lvl] + 18 + "px";  // just above the sheet at its saved height
     $("#left").appendChild(hint);
     setTimeout(hideHint, 3000);
   }
