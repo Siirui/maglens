@@ -27,6 +27,19 @@ from .prompts import PROMPT_VERSION
 from .store import Store, available
 
 LOCAL_ADMIN = {"name": "本机", "role": "admin"}
+# Sent on every response by the app itself (not only by Caddy), so local runs and tests see exactly what
+# readers get. Scripts only from this site: no inline <script> or on...= handlers anywhere in web/.
+SECURITY_HEADERS = {
+    "X-Robots-Tag": "noindex, nofollow",
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "same-origin",
+    "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+                               "img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; object-src 'none'; "
+                               "base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+    "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+    "Cross-Origin-Opener-Policy": "same-origin",
+}
+HSTS = "max-age=31536000"  # HTTPS only for a year; only sent over HTTPS (Caddy passes the scheme through)
 PUBLIC = {"/login.html", "/login.js", "/style.css", "/robots.txt", "/api/login", "/api/me", "/favicon.ico", "/favicon.svg"}
 ADMIN_ONLY = [  # (method, path regex)
     ("POST", r"/api/library/rescan"),
@@ -106,7 +119,9 @@ def create_app(cfg: Config, engine=None) -> FastAPI:
                 request.method == m and re.fullmatch(p, path) for m, p in ADMIN_ONLY):
             return JSONResponse({"detail": "admin only"}, status_code=403)
         resp = await call_next(request)
-        resp.headers["X-Robots-Tag"] = "noindex, nofollow"
+        resp.headers.update(SECURITY_HEADERS)
+        if request.url.scheme == "https":
+            resp.headers["Strict-Transport-Security"] = HSTS
         return resp
 
     def is_admin(request: Request) -> bool:

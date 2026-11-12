@@ -81,6 +81,10 @@ deploy/sync.sh ubuntu@服务器IP
 
 12. **公开仓库整理（2026-11-12）**：README 改成英文为主（`README.md`），另有中文版 `README.zh-CN.md`，互相链接。开发计划不再放在 GitHub：之前开的 10 个规划 issue 已删除，`docs/ROADMAP.md` 移出仓库、只留在本机。原因：仓库是公开的，issue 区留给外部的 bug 报告和建议（加了中英双语的 issue 模板，不允许空白 issue），读者的意见走网站里的反馈按钮。
 
+13. **安全响应头 + 服务器备份（2026-11-12）**：
+   - 安全响应头由应用自己发送，不只靠 Caddy，这样本机运行和测试里看到的和线上完全一样：CSP（脚本只能来自本站，不允许内联脚本和 `onclick=` 这类内联事件，也不允许被别的网站用 iframe 嵌入）、nosniff、Permissions-Policy；HTTPS 访问时再加 HSTS（一年）。登录页的脚本因此拆成了 `web/login.js`。有测试会检查 `web/` 里不能出现内联脚本，以后加功能时也要遵守。
+   - `deploy/backup.sh admin@<服务器IP>`：把服务器上独有的文件（`auth.json`、反馈、访问日志）打包备份到本机 `~/.maglens/server-backup/`，只保留最近 30 份，目录权限 700。**不要放进 iCloud 或网盘**，里面有密码哈希和会话签名密钥。
+
 ## 已知问题
 
 - 反馈的频率限制记在内存里，重启服务后清零（量很小，够用）。

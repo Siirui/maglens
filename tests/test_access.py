@@ -1,5 +1,6 @@
 """Accounts, reader/admin separation and the publish (no-PDF) deployment path."""
 import json
+import re
 import sqlite3
 import sys
 from pathlib import Path
@@ -90,6 +91,31 @@ def test_login_required(libdir, tmp_path):
     assert c.get(f"/api/mag/{a}/page/0.png").status_code == 401        # images are private too
     assert c.post("/api/login", json={"name": "amy", "password": "wrong"}).status_code == 401
     assert "noindex" in c.get("/login.html").headers["x-robots-tag"]
+
+
+def test_login_page_assets_and_security_headers(libdir, tmp_path):
+    app, _ = make_app(libdir, tmp_path, users=[("boss", "admin"), ("amy", "reader")])
+    anon, reader, admin = TestClient(app), TestClient(app), TestClient(app)
+    login(reader, "amy"), login(admin, "boss")
+    for c in (anon, reader, admin):                            # what the login page needs loads for everyone
+        for path in ("/login.html", "/login.js", "/style.css"):
+            assert c.get(path, follow_redirects=False).status_code == 200, path
+    assert anon.get("/app.js", follow_redirects=False).status_code == 303    # the reader itself needs a login
+    r = anon.get("/login.html")
+    assert "script-src 'self'" in r.headers["content-security-policy"] and "frame-ancestors 'none'" in r.headers["content-security-policy"]
+    assert r.headers["x-content-type-options"] == "nosniff" and "strict-transport-security" not in r.headers  # plain http
+    assert "strict-transport-security" in TestClient(app, base_url="https://testserver").get("/login.html").headers
+
+
+def test_no_inline_scripts_under_csp():
+    """The CSP forbids inline scripts and inline event handlers, so none may exist in web/."""
+    web = Path(__file__).resolve().parent.parent / "web"
+    inline_script = re.compile(r"<script(?![^>]*\bsrc=)[^>]*>", re.I)
+    handler_attr = re.compile(r"""<[^>]+\son[a-z]+\s*=\s*["']""", re.I)  # e.g. <button onclick="...">
+    for f in [*web.glob("*.html"), *web.glob("*.js")]:
+        text = f.read_text(encoding="utf-8")
+        assert not inline_script.search(text), f"inline <script> in {f.name}"
+        assert not handler_attr.search(text), f"inline on...= handler in {f.name}"
 
 
 def test_reader_vs_admin(libdir, tmp_path):

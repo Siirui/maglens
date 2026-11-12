@@ -296,7 +296,7 @@ async function loadPage(n) {
     S.data[n] = r.data; drawPanel(n, r); drawBoxes(n); markThumb(n);
   } else if (r.status === "error") {
     sec.innerHTML = head(n) + (isAdmin()
-      ? `<div class="empty err">这一页处理失败：${esc(r.error)}${canTranslate() ? `<br><button onclick="retry(${n})">重试</button>` : ""}</div>`
+      ? `<div class="empty err">这一页处理失败：${esc(r.error)}${canTranslate() ? `<br><button type="button" class="retry-page" data-page="${n}">重试</button>` : ""}</div>`
       : `<div class="empty">这一页暂时没有译文，可以先看左边的原文。</div>`);
   } else if (r.status === "waiting") {
     sec.innerHTML = head(n) + `<div class="empty"><div class="spinner"></div>第 ${n + 1} 页排队中…<br><small>后台批处理翻到这一页后，这里会自动刷新</small></div>`;
@@ -586,6 +586,8 @@ $("#btn-boxes").onclick = () => { S.boxes = !S.boxes; render(); };
 $("#btn-select").onclick = () => setSelecting(!S.selecting);
 $("#btn-tap").onclick = () => { S.tap = S.tap === "bubble" ? "sheet" : "bubble"; store.set("tap", S.tap); closeBubble(); syncToolButtons(); };
 $("#btn-retry").onclick = () => visiblePages().forEach(retry);
+// per-page retry buttons in the panel (no inline onclick: the CSP forbids inline handlers)
+$("#panel").addEventListener("click", e => { const b = e.target.closest(".retry-page"); if (b) retry(+b.dataset.page); });
 window.retry = async n => { await api(`/api/mag/${S.mag.id}/page/${n}/retranslate`, { method: "POST" }); loadPage(n); };
 $("#prev").onclick = () => go(S.rtl ? 1 : -1);
 $("#next").onclick = () => go(S.rtl ? -1 : 1);
