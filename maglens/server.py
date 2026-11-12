@@ -24,7 +24,7 @@ from .prompts import PROMPT_VERSION
 from .store import Store
 
 LOCAL_ADMIN = {"name": "本机", "role": "admin"}
-PUBLIC = {"/login.html", "/style.css", "/robots.txt", "/api/login", "/api/me", "/favicon.ico"}
+PUBLIC = {"/login.html", "/style.css", "/robots.txt", "/api/login", "/api/me", "/favicon.ico", "/favicon.svg"}
 ADMIN_ONLY = [  # (method, path regex)
     ("POST", r"/api/library/rescan"),
     ("POST", r"/api/mag/[^/]+/page/\d+/retranslate"),
@@ -89,7 +89,7 @@ def create_app(cfg: Config, engine=None) -> FastAPI:
             request.state.user = LOCAL_ADMIN
         else:
             request.state.user = auth.read_token(request.cookies.get(COOKIE))
-            if request.state.user is None and path not in PUBLIC:
+            if request.state.user is None and path not in PUBLIC and not path.startswith("/fonts/"):
                 if path.startswith("/api/"):
                     return JSONResponse({"detail": "login required"}, status_code=401)
                 return RedirectResponse("/login.html", status_code=303)

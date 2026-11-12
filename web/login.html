@@ -5,24 +5,40 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow">
 <title>MagLens 登录</title>
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="style.css">
 <style>
-  body { display: flex; align-items: center; justify-content: center; min-height: 100%; padding: 16px; }
-  form { width: 100%; max-width: 340px; background: var(--paper); border: 1px solid var(--line); border-radius: 10px;
-    padding: 28px 24px; box-shadow: 0 8px 30px rgba(0,0,0,.06); }
-  h1 { margin: 0 0 4px; font-size: 22px; color: var(--accent); letter-spacing: .04em; }
-  p.sub { margin: 0 0 22px; color: var(--ink3); font-size: 13px; }
+  body { display: flex; align-items: center; justify-content: center; min-height: 100%; padding: 16px;
+    background-image: radial-gradient(var(--dot) 1.3px, transparent 1.3px); background-size: 14px 14px; }
+  form { width: 100%; max-width: 360px; background: var(--paper); border: 3px solid var(--hard); border-radius: 18px;
+    padding: 30px 26px; box-shadow: 8px 8px 0 var(--hard); }
+  .logo { display: flex; align-items: center; gap: 12px; margin: 0 0 6px; }
+  .logo svg { width: 48px; height: 48px; flex: none; }
+  .logo .wordmark { font-family: var(--display); font-weight: 400; font-size: 32px; line-height: 1; color: var(--ink);
+    text-shadow: 3px 3px 0 var(--yellow); }
+  .logo .kana { align-self: flex-start; font-family: var(--display); font-size: 11px; color: #fff; background: var(--blue);
+    border: 2px solid var(--hard); padding: 0 7px; transform: rotate(-5deg); box-shadow: 2px 2px 0 var(--hard); }
+  p.sub { margin: 0 0 22px; color: var(--ink2); font-size: 13px; }
   label { display: block; font-size: 12px; color: var(--ink2); margin: 14px 0 6px; }
-  input { width: 100%; padding: 9px 11px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg);
+  input { width: 100%; padding: 10px 12px; border: 2px solid var(--hard); border-radius: 8px; background: var(--bg);
     color: var(--ink); font: inherit; font-size: 15px; }
-  input:focus { outline: none; border-color: var(--ink3); }
-  button { width: 100%; margin-top: 22px; padding: 9px; font-size: 15px; }
+  input:focus { outline: 3px solid var(--yellow); outline-offset: 1px; }
+  button { width: 100%; margin-top: 24px; padding: 12px; font-family: var(--display); font-size: 16px; color: #fff;
+    background: #111; border: 2px solid #111; border-radius: 10px; box-shadow: 3px 3px 0 var(--red); }
   .err { color: var(--accent); font-size: 13px; min-height: 18px; margin-top: 12px; }
 </style>
 </head>
 <body>
 <form id="f">
-  <h1>MagLens</h1>
+  <h1 class="logo">
+    <svg viewBox="0 0 96 96" aria-hidden="true">
+      <rect width="96" height="96" rx="24" fill="#E0442B"/>
+      <rect x="18" y="14" width="44" height="58" rx="5" fill="#FFF8EC" transform="rotate(-7 42 44)"/>
+      <circle cx="62" cy="60" r="21" fill="#2D5BE3" stroke="#FFF8EC" stroke-width="7"/>
+    </svg>
+    <span class="wordmark">MagLens</span>
+    <span class="kana" aria-hidden="true">マグレンズ</span>
+  </h1>
   <p class="sub">日文杂志 · 中文对照阅读</p>
   <label for="name">用户名</label>
   <input id="name" autocomplete="username" autocapitalize="off" required autofocus>

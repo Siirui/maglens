@@ -55,22 +55,52 @@ async function showShelf() {
       ` <button id="rescan" title="杂志目录：${esc(lib.dir)}">重新扫描</button>`
     : `${ready} 本可以阅读` + (ready < lib.magazines.length ? ` · ${lib.magazines.length - ready} 本即将上线` : "");
   if ($("#rescan")) $("#rescan").onclick = async () => { await api("/api/library/rescan", { method: "POST" }); showShelf(); };
-  $("#grid").innerHTML = lib.magazines.map(m => {
-    const open = isAdmin() || m.available;
-    return `
+
+  // continue reading: the magazine opened last, at the page it was left on (both kept per browser)
+  const last = lib.magazines.find(m => m.id === store.get("lastMag") && (isAdmin() || m.available));
+  $("#continue").innerHTML = last ? (() => {
+    const p = store.get("last." + last.id, 0) + 1;
+    return `<a class="cont" href="#/m/${last.id}/${p}">
+      <span class="sticker" aria-hidden="true">つづき！</span>
+      <img alt="" src="/api/mag/${last.id}/page/${last.cover || 0}.png?w=360">
+      <span class="info">
+        <span class="k">上次读到这儿</span>
+        <span class="ttl">${esc(`${seriesName(last)} ${issueName(last)}`)}</span>
+        <span class="row"><span class="bar"><i style="width:${pct(p, last.pages).toFixed(1)}%"></i></span>第 ${p} / ${last.pages} 页</span>
+      </span>
+      <span class="go">接着读 →</span>
+    </a>`;
+  })() : "";
+
+  // one shelf per series; the series with the newest issue first
+  const groups = new Map();
+  for (const m of lib.magazines) (groups.get(m.series) || groups.set(m.series, []).get(m.series)).push(m);
+  $("#grid").innerHTML = [...groups.values()].map(mags => `
+    <section class="series">
+      <div class="series-head">
+        <h2>${esc(seriesName(mags[0]))}</h2>
+        <span class="sub">${mags.length} 期</span>
+      </div>
+      <div class="issues">${mags.map(card).join("")}</div>
+    </section>`).join("") || `<div class="empty">${isAdmin() ? "目录里没有找到 PDF。" : "还没有可以阅读的杂志。"}</div>`;
+}
+
+function card(m) {
+  const open = isAdmin() || m.available;
+  return `
     <${open ? "a" : "div"} class="card${open ? "" : " soon"}" data-id="${m.id}" ${open ? `href="#/m/${m.id}"` : ""}>
-      ${open ? `<img loading="lazy" alt="" src="/api/mag/${m.id}/page/${m.cover || 0}.png?w=360">` : `<div class="ph">即将上线</div>`}
+      ${open ? `<img loading="lazy" alt="" src="/api/mag/${m.id}/page/${m.cover || 0}.png?w=360">` : `<div class="ph">COMING SOON</div>`}
       <div class="t">${esc(issueName(m))}</div>
       <div class="s">${cardLine(m)}</div>
       ${isAdmin() && !m.available ? `<div class="prog"><i style="width:${(100 * m.done / m.pages).toFixed(1)}%"></i></div>` : ""}
     </${open ? "a" : "div"}>`;
-  }).join("") || `<div class="empty">${isAdmin() ? "目录里没有找到 PDF。" : "还没有可以阅读的杂志。"}</div>`;
 }
 
 // ---------------------------------------------------------------- reader
 async function openReader(id, page) {
   $("#shelf").hidden = true; $("#reader").hidden = false; $("#tools").hidden = false;
   $("#bar").classList.add("reading");
+  store.set("lastMag", id);
   if (!S.mag || S.mag.id !== id) {
     S.mag = await api(`/api/mag/${id}`); S.data = {};
     setOrder();
