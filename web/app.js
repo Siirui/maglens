@@ -81,7 +81,9 @@ async function route() {
 // that wrote the entry: on a shared browser, another account's local positions are ignored. Every
 // server call fails soft (offline, 429, ...): we just keep using localStorage.
 const RS = { server: null, timer: 0, pending: null, skew: 0, SAVE_AFTER: 1500 };
-const syncOn = () => ME.auth && !!ME.user;  // local single-user mode: localStorage only
+// local single-user mode and issue-limited accounts (the shared public trial account, used by many
+// strangers) keep the position in this browser only
+const syncOn = () => ME.auth && !!ME.user && ME.user.mags == null;
 const atMs = e => (e && Date.parse(e.at)) || 0;
 const newer = (a, b) => (!a ? b : !b ? a : atMs(b) > atMs(a) ? b : a);
 function noteSkew(r) { const d = Date.parse(r.headers.get("date")); if (d) RS.skew = d - Date.now(); }

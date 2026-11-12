@@ -96,6 +96,8 @@ deploy/sync.sh ubuntu@服务器IP
 
 16. **PWA：添加到主屏幕（2026-11-12）**：`web/manifest.webmanifest` + 图标（192/512、安卓圆形裁切用的 maskable、iOS 的 apple-touch-icon，都由 `tests/make_icons.py` 从 `favicon.svg` 生成）。装到主屏幕后全屏打开，顶栏避开状态栏和刘海。manifest 和图标不需要登录就能访问（浏览器取这些文件时不带 cookie）。没加 Service Worker：现在的 Chromium（安卓 Chrome、Edge）安装已经不需要它，也就不用担心缓存私密内容。iPhone 的 Safari 里书架顶部会提示一次「分享 → 添加到主屏幕」，关掉就不再出现；其他浏览器、微信里不提示。
 
+17. **「继续阅读」跨设备同步（2026-11-12）**（新文件 `maglens/reading.py`）：每个账号读到哪一页存在服务器的 `reading.json`（只在服务器上，`sync.sh` 不覆盖，`backup.sh` 会备份）。翻到一页停留约 1.5 秒后保存，切到后台时立刻保存；书架的「上次读到这儿」取本机和服务器里较新的那个，时间以服务器时钟为准。读者每分钟最多保存 60 次。删账号会一起删掉它的进度。**限定了期数的账号（公开试读账号）不在服务器上存进度**，只记在各自浏览器里，因为它被很多陌生人共用，不然后来的人会看到前一个人读到的页。
+
 ## 已知问题
 
 - iOS 主屏幕 App 的登录状态和 Safari 是分开的：第一次从主屏幕打开要再登录一次，之后会一直保持。
@@ -105,7 +107,6 @@ deploy/sync.sh ubuntu@服务器IP
 - 反馈的频率限制记在内存里，重启服务后清零（量很小，够用）。
 - 4 月号第 145 页没有译文（内容过滤）。可以换 Sonnet 单独重试，也可以不管。
 - Haiku 的小毛病：个别术语音译（如 Nomex 写成「诺梅克斯」），页面类型标签常标错（已对读者隐藏）。之前的译注噪音已经在显示层过滤，提示词也改了，但已经翻好的数据没有重翻。
-- 「继续阅读」只记在当前浏览器里，换设备不同步。
 - `deploy/setup.sh` 只支持 Ubuntu（`apt-get`）。线上那台是 Alibaba Cloud Linux 4，是照着脚本手动部署的，`sync.sh` 可以直接用。
 - `maglens.publish` 不能两个进程同时运行：临时文件名固定是 `xxx.tmp`，会互相覆盖并报错。导出时别同时跑两个（比如两个 Claude session 一个在导出、一个在 `sync.sh`）。
 - 部署时修掉的（2026-11-12）：上传代码时会把 `docs/` 里的样张 PDF 一起传上去，现在 `setup.sh`、`sync.sh` 都排除了 `*.pdf`；加账号的命令先 `cd` 再 `sudo -u maglens`，因为 `/opt/maglens` 只有 maglens 用户能进入而失败，改成 `sudo -u maglens env -C /opt/maglens/app …`。

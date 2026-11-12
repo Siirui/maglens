@@ -776,7 +776,7 @@ def test_reading_position_per_account(libdir, tmp_path):
     assert put(trial).status_code == 404
     assert trial.get("/api/reading").json() == {"last": None, "pages": {}}
     Auth(tmp_path / "auth.json").set_mags("trial", [jan])
-    assert trial.get("/api/reading").json()["last"]["mag_id"] == jan
+    assert trial.get("/api/reading").json() == {"last": None, "pages": {}}   # shared accounts keep none
 
     # it survives a restart (a new app on the same data dir), and removing an account forgets it
     cfg = load_config(library_dir=libdir, data_dir=tmp_path, manual=True)
@@ -869,3 +869,17 @@ def test_reading_file_errors_fail_soft(libdir, tmp_path, monkeypatch):
     monkeypatch.setattr(ReadingState, "_load", broken)
     assert amy.get("/api/reading").json() == {"last": None, "pages": {}}
     assert amy.put("/api/reading", json={"mag_id": jan, "page": 0}).status_code == 503
+
+
+def test_shared_trial_account_keeps_no_server_position(libdir, tmp_path):
+    """An issue-limited account is shared by strangers: one visitor's page must not show up for the next."""
+    app, store = make_app(libdir, tmp_path, users=[("trial", "reader"), ("amy", "reader")], translate=("1月", "2月"))
+    jan, _ = ids(store)
+    Auth(tmp_path / "auth.json").set_mags("trial", [jan])
+    a, b, amy = TestClient(app), TestClient(app), TestClient(app)
+    login(a, "trial"), login(b, "trial"), login(amy, "amy")
+    r = a.put("/api/reading", json={"mag_id": jan, "page": 2})
+    assert r.status_code == 200 and r.json()["saved"] is False
+    assert b.get("/api/reading").json() == {"last": None, "pages": {}}
+    assert amy.put("/api/reading", json={"mag_id": jan, "page": 1}).status_code == 200   # friends still sync
+    assert amy.get("/api/reading").json()["last"]["page"] == 1

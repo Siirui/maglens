@@ -485,8 +485,16 @@ def create_app(cfg: Config, engine=None) -> FastAPI:
     # ------------------------------------------------------------------ reading position
     # "继续阅读" per account, so it follows the account across devices (maglens/reading.py). Pages are
     # 0-based. The frontend only uses this when logged in; local single-user mode keeps localStorage.
+    def shared_account(request: Request) -> bool:
+        """Issue-limited readers are shared trial accounts (posted publicly, used by many people), so a
+        server-side position would leak one stranger's place to the next: keep theirs per browser."""
+        user = request.state.user or {}
+        return user.get("role") != "admin" and user.get("mags") is not None
+
     @app.get("/api/reading")
     def reading_get(request: Request):
+        if shared_account(request):
+            return {"last": None, "pages": {}}
         # only issues this account can open now (same rule as mag_or_404): a scope narrowed since, or an
         # issue taken down, is left out
         mags = {m["id"]: m for m in store.magazines()
@@ -512,6 +520,8 @@ def create_app(cfg: Config, engine=None) -> FastAPI:
         if not isinstance(page, int) or isinstance(page, bool) or not 0 <= page < m["pages"]:
             raise HTTPException(400, "页码不对")
         now = guard.utc_now(ms=True)
+        if shared_account(request):
+            return {"ok": True, "at": now, "saved": False}
         try:
             reading.put(request.state.user["name"], mag_id, page, now)
         except OSError as e:
