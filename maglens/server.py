@@ -21,7 +21,7 @@ from .config import ROOT, Config
 from .extract import make_engine
 from .jobs import Jobs
 from .prompts import PROMPT_VERSION
-from .store import Store
+from .store import Store, available
 
 LOCAL_ADMIN = {"name": "本机", "role": "admin"}
 PUBLIC = {"/login.html", "/style.css", "/robots.txt", "/api/login", "/api/me", "/favicon.ico", "/favicon.svg"}
@@ -59,11 +59,6 @@ def inserted_pages(store: Store, mag_id: str) -> list[int]:
         if kana <= 20 and _PROMO.search(text):
             out.append(row["page"])
     return out
-
-
-def available(m: dict) -> bool:
-    """Every page has a final result (translated, or failed for good)."""
-    return m["done"] + m.get("errors", 0) >= m["pages"]
 
 
 def published_image(cfg: Config, mag_id: str, n: int, w: int) -> Path:
@@ -149,10 +144,10 @@ def create_app(cfg: Config, engine=None) -> FastAPI:
     # Every handler re-reads auth.json first, so accounts added with `python -m maglens.users` while the
     # server is running are neither invisible here nor overwritten by the next save.
     def accounts(request: Request) -> str:
-        if not auth.enabled:
-            raise HTTPException(409, "本机没有启用账号，账号管理只在服务器上使用")
         if not auth.refresh():  # never save over an auth.json we couldn't read
             raise HTTPException(503, "账号文件 auth.json 读取失败，请先在服务器上检查")
+        if not auth.enabled:
+            raise HTTPException(409, "本机没有启用账号，账号管理只在服务器上使用")
         return request.state.user["name"]
 
     def account_list():

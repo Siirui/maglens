@@ -25,8 +25,8 @@ from PIL import Image
 
 from . import library, render
 from .config import load_config
-from .server import WIDTHS, available
-from .store import SCHEMA, Store
+from .server import WIDTHS
+from .store import SCHEMA, Store, available
 
 WEBP_QUALITY = {360: 70, 1600: 80, 2400: 82}
 

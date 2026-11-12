@@ -354,3 +354,14 @@ def test_broken_or_missing_auth_file_fails_closed(libdir, tmp_path):
     assert not f.exists()                                      # nothing written over the gap
     f.write_text(good)
     assert boss.get("/api/users").status_code == 200
+
+    bak = tmp_path / "auth.bak"                                # moved away and back (same inode/mtime)
+    f.rename(bak)
+    assert boss.get("/api/users").status_code == 503
+    bak.rename(f)
+    assert boss.get("/api/users").status_code == 200
+
+    f.write_text(good.replace('"role": "reader"', '"role": "reader", "mags": "387f"'))  # mags not a list
+    assert c.get("/api/library").status_code == 200 and boss.get("/api/users").status_code == 503
+    with pytest.raises(ValueError, match="格式有误"):          # a fresh start says what is wrong
+        Auth(f)

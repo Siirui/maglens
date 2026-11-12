@@ -17,6 +17,7 @@ import hashlib
 import hmac
 import json
 import secrets
+import threading
 import time
 from pathlib import Path
 
@@ -59,55 +60,65 @@ class Auth:
         self.users: dict[str, dict] = {}
         self._mtime: tuple | None = None
         self.ok = True  # False while auth.json is missing/unreadable but accounts are still loaded
+        self._lock = threading.RLock()
         self.reload()
 
     @property
     def enabled(self) -> bool:
         return bool(self.users)
 
-    def _stat(self) -> tuple | None:
+    def _stat(self):
         try:
             st = self.path.stat()
         except FileNotFoundError:
             return None
+        except OSError as e:
+            return ("error", str(e))  # differs from any real stat, so a fixed file is picked up
         return st.st_ino, st.st_mtime_ns, st.st_size  # save() replaces the file, so the inode changes too
 
     def refresh(self) -> bool:
-        """Pick up edits made by another process (e.g. `maglens.users` on the server); one stat() call.
+        """Pick up edits made by another process (e.g. `maglens.users` on the server): one stat() call.
 
         Fails closed: if auth.json is missing (while accounts are loaded), unreadable or malformed, the
         accounts already in memory stay in force instead of turning login off or taking the site down.
         Returns False in that state, so account edits can refuse to overwrite a file they can't read.
         To revoke every account, use `maglens.users remove` or restart the service."""
-        try:
+        with self._lock:
             st = self._stat()
-        except OSError:
-            self.ok = False
-            return False
-        if st == self._mtime:
+            if st == self._mtime:
+                return self.ok
+            try:
+                if st is None and self.users:
+                    raise FileNotFoundError(self.path)
+                self._load()
+            except Exception:  # noqa: BLE001 — any bad file keeps the loaded accounts
+                self.ok = False
+            self._mtime = st  # also on failure: re-read only once the file changes again
             return self.ok
-        if st is None and self.users:
-            self.ok = False
-            return False
-        try:
-            self.reload()
-        except (ValueError, KeyError, TypeError, OSError):
-            self._mtime, self.ok = st, False  # don't re-parse the same broken file on every request
-        return self.ok
 
     def reload(self):
-        """Read auth.json; on error raise and leave the loaded accounts untouched."""
-        mtime = self._stat()
-        if mtime is None:
+        """Read auth.json now; raises ValueError with a readable message if it is broken."""
+        with self._lock:
+            try:
+                self._load()
+            except Exception as e:  # noqa: BLE001
+                raise ValueError(f"{self.path} 格式有误，请修好或从备份恢复：{e}") from e
+            self._mtime = self._stat()
+
+    def _load(self):
+        """Parse and validate first, then swap everything in at once."""
+        if not self.path.exists():
             secret, users = b"", {}
         else:
             raw = json.loads(self.path.read_text(encoding="utf-8"))
             secret = bytes.fromhex(raw["secret"])
             users = {u["name"]: u for u in raw.get("users", [])}
-            if not all(isinstance(u.get("hash"), str) and u.get("role") in ROLES for u in users.values()):
-                raise ValueError("malformed user entry")
+            for u in users.values():
+                mags = u.get("mags")
+                if not (isinstance(u["name"], str) and isinstance(u.get("hash"), str) and u.get("role") in ROLES
+                        and (mags is None or (isinstance(mags, list) and all(isinstance(x, str) for x in mags)))):
+                    raise ValueError(f"账号 {u.get('name')!r} 的字段不对")
         self.secret, self.users, self.ok = secret, users, True
-        self._mtime = mtime  # last, so a concurrent refresh() never skips a reload it still needs
 
     def save(self):
         if not self.secret:

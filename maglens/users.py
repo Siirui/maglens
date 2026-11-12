@@ -34,7 +34,7 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description="管理 MagLens 账号")
     ap.add_argument("--data-dir", help="数据目录（默认读 config.toml，部署时指向 dist 目录）")
     sub = ap.add_subparsers(dest="cmd", required=True)
-    a = sub.add_parser("add", help="新增账号（已存在则覆盖密码和角色）")
+    a = sub.add_parser("add", help="新增账号（已存在则改密码和角色，读者原有的期数限制保留，用 scope 修改）")
     a.add_argument("name")
     a.add_argument("--role", choices=ROLES, default="reader")
     p = sub.add_parser("passwd", help="修改密码")
@@ -53,7 +53,7 @@ def main(argv=None):
         old = auth.users.get(args.name, {})
         mags = old.get("mags") if args.role == "reader" else None  # re-adding keeps an issue limit
         auth.set_user(args.name, _ask_password(), args.role, mags)
-        print(f"已保存 {args.name}（{args.role}） → {auth.path}" + (f"，仍然只能看：{' '.join(mags)}" if mags else ""))
+        print(f"已保存 {args.name}（{args.role}） → {auth.path}" + ("" if mags is None else f"，仍然只能看：{' '.join(mags) or '（无）'}"))
     elif args.cmd == "passwd":
         if args.name not in auth.users:
             sys.exit(f"没有这个账号：{args.name}")
@@ -68,8 +68,7 @@ def main(argv=None):
         if auth.users[args.name]["role"] == "admin":
             sys.exit("管理员可以看所有杂志，不需要限定")
         if args.mags:
-            from .server import available
-            from .store import Store
+            from .store import Store, available
             known = ({m["id"] for m in Store(cfg.db_path, pages_dir=cfg.data_dir / "pages").magazines()
                       if available(m)} if cfg.db_path.exists() else set())
             bad = [x for x in args.mags if x not in known]

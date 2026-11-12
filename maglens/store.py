@@ -27,6 +27,12 @@ CREATE TABLE IF NOT EXISTS batches (
 """
 
 
+
+def available(m: dict) -> bool:
+    """Every page has a final result (translated, or failed for good): readers may open it."""
+    return m["done"] + m.get("errors", 0) >= m["pages"]
+
+
 class Store:
     def __init__(self, path: Path, pages_dir: Path | None = None):
         self.pages_dir = pages_dir  # pre-rendered page images (published deployments have no PDFs)
