@@ -58,7 +58,7 @@ const KIND_LABEL = { article: "文章", feature_opener: "专题开篇", toc: "�
 
 const S = {
   mag: null, page: 0, mode: store.get("mode", "bi"), spread: store.get("spread", false),
-  rtl: store.get("rtl", true), boxes: false, selecting: false, data: {}, polls: {},
+  rtl: store.get("rtl", false),  // page-turn direction; default is how Chinese books turn (next = →) boxes: false, selecting: false, data: {}, polls: {},
   fit: store.get("fit", "page"), zoom: store.get("zoom", 1),
   tap: store.get("tap", "sheet"),  // phones: "sheet" (tap a passage -> the sheet scrolls to it) or "bubble"
 };
@@ -493,8 +493,9 @@ function render() {
   $("#peek-page").textContent = `${vis.map(n => n + 1).join("–")} / ${S.mag.pages}`;
   $("#peek-text").textContent = "译文"; delete $("#peek-text").dataset.page;
   syncToolButtons();
-  // left: page images (RTL binding puts the lower page number on the right)
-  const order = S.rtl ? [...vis].reverse() : vis;
+  // left: page images. Spreads keep the magazine's own right binding (lower page number on the right)
+  // whatever the turn direction, so two-page photos and layouts stay in one piece.
+  const order = [...vis].reverse();
   $("#pages").innerHTML = order.map(n => `
     <div class="pg" data-page="${n}">
       <img src="/api/mag/${S.mag.id}/page/${n}.png?w=${S.imgW || 1600}" draggable="false">
@@ -829,7 +830,7 @@ function syncToolButtons() {
   document.querySelectorAll("#mode button").forEach(b => b.classList.toggle("on", b.dataset.mode === S.mode));
   $("#panel").className = "mode-" + S.mode + (S.boxes ? "" : " hidemeta");
   $("#btn-spread").classList.toggle("on", S.spread);
-  $("#btn-dir").textContent = S.rtl ? "右翻 ⇐" : "左翻 ⇒";
+  $("#btn-dir").textContent = S.rtl ? "日式 ⇐" : "中式 ⇒";
   $("#btn-boxes").classList.toggle("on", S.boxes);
   $("#btn-select").classList.toggle("on", S.selecting);
   $("#btn-tap").classList.toggle("on", S.tap === "bubble");

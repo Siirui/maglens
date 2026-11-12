@@ -7,7 +7,7 @@ A reader for Japanese magazines with a Chinese translation beside every page. Ea
 ## What it does
 
 - **Original and translation side by side.** Hover or tap a passage on the page to highlight its translation, and the other way round. Switch between Chinese, bilingual and Japanese only.
-- **Reads like a magazine.** Right-to-left binding, two-page spreads, fit modes, zoom, swipe to turn pages, and the next pages preloaded.
+- **Reads like a magazine.** Pages turn the way Chinese books do by default (next page on the right, or switch to Japanese order), two-page spreads kept in the magazine's own right-bound layout, fit modes, zoom, swipe to turn pages, and the next pages preloaded.
 - **Phones.** In portrait the page fills the screen and the translation sits in a bottom sheet with three heights. An optional tap mode shows a passage's translation in a bubble right on the page.
 - **Batch translation that resumes.** Translate a whole issue in the background; interrupted runs pick up where they stopped, and pages that are already done are never paid for twice.
 - **A glossary per series**, so names of shops, brands and people stay consistent from issue to issue.
@@ -49,7 +49,7 @@ In `config.toml` or on the command line:
 
 ## Keyboard
 
-←/→ turn pages (right-to-left by default, like Japanese magazines) · S spread · 1/2/3/4 page / width / height / fill · +/−/0 zoom (also ⌘ + scroll or pinch) · B show text boxes · R select a region to re-read · Esc cancel
+←/→ turn pages (→ is next by default) · S spread · 1/2/3/4 page / width / height / fill · +/−/0 zoom (also ⌘ + scroll or pinch) · B show text boxes · R select a region to re-read · Esc cancel
 
 ## Accounts and deployment
 
