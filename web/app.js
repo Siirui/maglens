@@ -6,7 +6,7 @@ const api = (p, opt) => fetch(p, opt).then(r => {
   return r.json();
 });
 // Reader rate limit (server: 429 + Retry-After). Seconds to wait, capped so a page never waits too long.
-const retryAfter = r => Math.min(60, Math.max(2, +(r.headers.get("Retry-After") || 5)));
+const retryAfter = r => { const v = parseInt(r.headers.get("Retry-After"), 10); return Math.min(60, Math.max(2, v > 0 ? v : 5)); };
 function slowDown(sec) {
   let t = $("#slowdown");
   if (!t) { t = document.createElement("div"); t.id = "slowdown"; t.setAttribute("role", "status"); document.body.appendChild(t); }
@@ -522,10 +522,11 @@ function render() {
 async function retryImage(img) {
   const url = img.getAttribute("src");
   if (!url || img._retrying === url) return;
-  let r; try { r = await fetch(url, { cache: "no-store" }); } catch { return; }  // only after a failure
-  if (r.status !== 429 || !img.isConnected) return;
+  img._retrying = url;  // set before awaiting, so one failure never sends two probes
+  let r; try { r = await fetch(url, { cache: "no-store" }); } catch { img._retrying = null; return; }  // only after a failure
+  if (r.status !== 429 || !img.isConnected) { img._retrying = null; return; }
   const sec = retryAfter(r);
-  img._retrying = url; slowDown(sec);
+  slowDown(sec);
   img.classList.add("waiting");  // hide the browser's broken-image icon meanwhile
   img.addEventListener("load", () => img.classList.remove("waiting"), { once: true });
   setTimeout(() => { if (img.isConnected && img.getAttribute("src") === url) { img._retrying = null; img.src = url; } }, sec * 1000);
