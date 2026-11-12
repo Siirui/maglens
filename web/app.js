@@ -299,7 +299,7 @@ const pinched = () => (window.visualViewport?.scale || 1) > 1.01;  // panning a 
 // and every listener here can be passive. Direction is locked in the first few pixels; a drag turns the
 // page past 22% of the width, or on a quick flick, and otherwise springs back.
 {
-  const LOCK = 10, COMMIT = 0.22, FLICK = 0.35, LONGPRESS = 500;  // px, × stage width, px/ms, ms
+  const LOCK = 10, COMMIT = 0.22, FLICK = 0.35, LONGPRESS = 500, EDGE = 16;  // px, × stage width, px/ms, ms, px
   const panel = $("#panel"), stage = $("#stage"), calm = matchMedia("(prefers-reduced-motion: reduce)");
   const still = () => calm.matches;
   const deltaOf = dx => dx > 0 ? (S.rtl ? 1 : -1) : (S.rtl ? -1 : 1);  // same as ←/→ and the ‹ › buttons
@@ -329,6 +329,7 @@ const pinched = () => (window.visualViewport?.scale || 1) > 1.01;  // panning a 
     if (e.target.closest("input, textarea, select, button, a, label, [contenteditable], #grab, #bubble")) return;
     if (!getSelection().isCollapsed || scrollsX(e.target, e.currentTarget)) return;  // adjusting a text selection
     const t = e.touches[0];
+    if (t.clientX < EDGE || t.clientX > innerWidth - EDGE) return;  // the system back gesture lives at the screen edges
     g = { x: t.clientX, y: t.clientY, t: e.timeStamp, lock: null, dx: 0, w: stage.clientWidth, v: [[e.timeStamp, t.clientX]] };
   }
   function drag(e) {
@@ -412,12 +413,13 @@ const pinched = () => (window.visualViewport?.scale || 1) > 1.01;  // panning a 
     hint = document.createElement("div");
     hint.id = "swipe-hint"; hint.setAttribute("aria-hidden", "true");
     hint.textContent = "← 左右滑动翻页 →";
-    hint.style.bottom = sheetLevels()[SHEET.lvl] + 18 + "px";  // just above the sheet at its saved height
+    // just above the sheet at its saved height, but never off the top of a short screen
+    hint.style.bottom = Math.min(sheetLevels()[SHEET.lvl] + 18, $("#reader").clientHeight - 48) + "px";
     $("#left").appendChild(hint);
     setTimeout(hideHint, 3000);
   }
   new MutationObserver(maybeHint).observe($("#reader"), { attributes: true, attributeFilter: ["hidden"] });
-  SHEET.mq.addEventListener("change", maybeHint);
+  SHEET.mq.addEventListener("change", () => setTimeout(maybeHint));  // after applyLayout() has built the sheet
   maybeHint(); syncZoom();
 }
 // drag to pan when the page is larger than the stage (not while box-selecting)

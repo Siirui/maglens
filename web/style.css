@@ -383,7 +383,7 @@ html.sheet-ui, html.sheet-ui body { overscroll-behavior-x: none; }
    #panel themselves, so nothing gains sideways scroll room for the browser to pan */
 html.sheet-ui #stage, html.sheet-ui #panel { touch-action: manipulation; touch-action: pan-y pinch-zoom; overscroll-behavior-x: none; }
 html.sheet-ui.vv-zoomed #stage, html.sheet-ui.vv-zoomed #panel, html.sheet-ui #stage.pannable { touch-action: manipulation; }
-#swipe-hint { position: absolute; left: 50%; bottom: calc(var(--peek, 64px) + 18px); transform: translateX(-50%); z-index: 3;
+#swipe-hint { position: absolute; left: 50%; bottom: calc(var(--peek, 64px) + 18px); transform: translateX(-50%); z-index: 5;
   padding: 6px 14px; border-radius: 999px; background: var(--ink); color: var(--paper); font-size: 13px; font-weight: 600;
   letter-spacing: .04em; white-space: nowrap; pointer-events: none; opacity: .86; animation: swipe-hint-in .3s ease-out; transition: opacity .35s; }
 #swipe-hint.out { opacity: 0; }
