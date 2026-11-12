@@ -4,9 +4,9 @@
 
 | 项目 | 状态 |
 |---|---|
-| 代码 | `~/Projects/maglens`，`main` 分支，32 个测试通过，pyflakes 无警告 |
-| 杂志 PDF | `~/Magazines/2026`（12 本 POPEYE，其中 2 月号原本是 JPG 文件夹，已转成 PDF 放在 `~/.maglens/converted/`） |
-| 翻译数据 | `~/.maglens/maglens.sqlite3`：2,113 页里有 2,112 页翻好；4 月号第 145 页每次都被内容过滤拦下，只能看原图 |
+| 代码 | `~/Projects/maglens`，`main` 分支，59 个测试通过（含 `tests/test_frontend.py`，需要本机有 node），pyflakes 无警告 |
+| 杂志 PDF | `~/Magazines/2026`：12 本 POPEYE（2 月号原本是 JPG 文件夹，已转成 PDF 放在 `~/.maglens/converted/`）；`BRUTUS/` 17 本；`2nd/` 5 本 |
+| 翻译数据 | `~/.maglens/maglens.sqlite3`：POPEYE 12 本 2,113 页里有 2,112 页翻好（4 月号第 145 页每次都被内容过滤拦下，只能看原图）；BRUTUS 只翻了最新的 No.1061（115/115，$1.04）；2nd 只翻最新的 2026.11（134 页，2026-11-12 晚上在跑）。其余 BRUTUS/2nd 按用户要求暂不翻 |
 | 翻译花费 | Haiku，按标价折算约 $25，实际计入 Claude 订阅额度 |
 | 部署包 | `~/.maglens/dist`（12 本，1.07GB WebP + 精简数据库） |
 | 线上 | 服务器地址等私密信息在本机的 `docs/PRIVATE.md`（已加入 .gitignore，仓库是公开的）。**https://maglens.net**（2026-11-12 上线）：阿里云吉隆坡轻量通用型，Alibaba Cloud Linux 4，`ssh admin@<服务器IP>`，同步用 `deploy/sync.sh admin@<服务器IP>`。详见 [DEPLOY.md](DEPLOY.md) 开头 |
@@ -125,5 +125,14 @@ deploy/sync.sh ubuntu@服务器IP
 - 部署时修掉的（2026-11-12）：上传代码时会把 `docs/` 里的样张 PDF 一起传上去，现在 `setup.sh`、`sync.sh` 都排除了 `*.pdf`；加账号的命令先 `cd` 再 `sudo -u maglens`，因为 `/opt/maglens` 只有 maglens 用户能进入而失败，改成 `sudo -u maglens env -C /opt/maglens/app …`。
 
 ## 下一步
+
+**2026-11-12 收工时的进度**
+- 进行中：2nd 2026.11 后台翻译（`cli_runner --only "2nd 2026.11" --series 2nd`）。翻完后跑一次 `deploy/sync.sh`，把 BRUTUS No.1061、2nd 2026.11 和今天的修复（书架按系列合并、按期号排序）一起上线。今天线上只同步过「默认中式翻页」和译文不显示的热修复。
+- 待用户确认后再做（涉及公开访问）：
+  1. 「试读」权限：试读账号自动只能看每种杂志的最新一期，出新刊自动跟着换。
+  2. 邀请码注册：码有名额和有效期，同 IP 每天限注册 2–3 个，管理页能看每个码注册了谁、一键停用。暂不做手机验证（短信要备案、涉及个人信息、劝退新人），被滥用了再考虑邮箱验证。
+  3. 小红书试读用新建的账号，不动现有朋友的账号（具体见本机 `docs/PRIVATE.md`）。
+- 用户那边：微信内置浏览器测一遍；朋友在安卓 Edge 上试滑动翻页；发给 5–10 个朋友。
+
 
 开发计划在本机的 `docs/ROADMAP.md`（不进仓库，按优先级排好，标明了哪些可以同时做）。
