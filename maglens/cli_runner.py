@@ -49,10 +49,15 @@ class PageError(RuntimeError):
     pass
 
 
-def issue_key(title: str) -> tuple[int, int]:
-    """'popeye2026.11' / 'POPEYE 2026.08' / '2026年 06月号' -> (2026, 11). Undated -> (0, 0)."""
+def issue_key(title: str) -> tuple[int, int, int]:
+    """'popeye2026.11' / 'POPEYE 2026.08' / '2026年 06月号' -> (2026, 11, 0); 'BRUTUS No.1061' -> (0, 0, 1061).
+    Neither (specials) -> (0, 0, 0). Sorting descending puts the newest issue first. Keep in step with
+    issueKey/issueNo in web/app.js."""
     m = re.search(r"(20\d\d)\D{0,3}?(\d{1,2})(?!\d)", title)
-    return (int(m.group(1)), int(m.group(2))) if m else (0, 0)
+    if m:
+        return int(m.group(1)), int(m.group(2)), 0
+    n = re.search(r"\bNo\.?\s*(\d+)", title, re.I)
+    return 0, 0, int(n.group(1)) if n else 0
 
 
 def page_prompt(mag: dict, n: int, glossary: list[dict], prev_summary: str | None,

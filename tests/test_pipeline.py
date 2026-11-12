@@ -135,6 +135,9 @@ def test_issue_order():
     titles = ["POPEYE Special ", "popeye2026.01", "2026年 06月号", "POPEYE 2026.08 ", "popeye2026.11"]
     assert sorted(titles, key=issue_key, reverse=True) == [
         "popeye2026.11", "POPEYE 2026.08 ", "2026年 06月号", "popeye2026.01", "POPEYE Special "]
+    brutus = ["BRUTUS 特別編集", "BRUTUS No.1045", "BRUTUS No.1061", "BRUTUS No.1050"]
+    assert sorted(brutus, key=issue_key, reverse=True) == [
+        "BRUTUS No.1061", "BRUTUS No.1050", "BRUTUS No.1045", "BRUTUS 特別編集"]
 
 
 def _runner(tmp_path, pdf):
