@@ -83,7 +83,7 @@ async function route() {
 const RS = { server: null, timer: 0, pending: null, skew: 0, SAVE_AFTER: 1500 };
 // local single-user mode and issue-limited accounts (the shared public trial account, used by many
 // strangers) keep the position in this browser only
-const syncOn = () => ME.auth && !!ME.user && ME.user.mags == null;
+const syncOn = () => ME.auth && !!ME.user && (ME.user.role === "admin" || ME.user.mags == null);  // same rule as the server
 const atMs = e => (e && Date.parse(e.at)) || 0;
 const newer = (a, b) => (!a ? b : !b ? a : atMs(b) > atMs(a) ? b : a);
 function noteSkew(r) { const d = Date.parse(r.headers.get("date")); if (d) RS.skew = d - Date.now(); }
