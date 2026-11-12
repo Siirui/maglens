@@ -10,7 +10,6 @@ import json
 import re
 import threading
 import time
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -18,7 +17,7 @@ from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import library, render
+from . import guard, library, render
 from .auth import COOKIE, ROLES, SESSION_DAYS, Auth
 from .config import ROOT, Config
 from .extract import make_engine
@@ -52,6 +51,7 @@ ADMIN_ONLY = [  # (method, path regex)
     ("POST", r"/api/users(/.*)?"),
     ("DELETE", r"/api/users/.*"),
     ("GET", r"/api/feedback"),
+    ("GET", r"/api/access/summary"),
 ]
 USERNAME = re.compile(r"[\w.\-]{1,32}")  # \w includes CJK, so Chinese names are fine
 MIN_PASSWORD = 8
@@ -93,6 +93,10 @@ def create_app(cfg: Config, engine=None) -> FastAPI:
     library.scan_all(cfg, store)
     app = FastAPI(title="MagLens")
     app.state.store, app.state.jobs, app.state.auth = store, jobs, auth
+    # Reader rate limits + access log (maglens/guard.py). Both on app.state so tests can swap the
+    # clock and shrink the rules.
+    app.state.limiter = guard.RateLimiter()  # read per request, so a test can replace it
+    access_log = app.state.access_log = guard.JsonlFile(cfg.data_dir / "access.jsonl", guard.ACCESS_MAX_BYTES)
 
     # ------------------------------------------------------------------ auth
     @app.middleware("http")
@@ -126,6 +130,27 @@ def create_app(cfg: Config, engine=None) -> FastAPI:
 
     def is_admin(request: Request) -> bool:
         return (request.state.user or {}).get("role") == "admin"
+
+    def client_ip(request: Request) -> str:
+        return request.client.host if request.client else "?"
+
+    def log_access(request: Request, mag_id: str, n: int, event: str):
+        access_log.append({"time": guard.utc_now(), "user": request.state.user["name"], "ip": client_ip(request),
+                           "mag_id": mag_id, "page": n, "event": event})
+
+    def throttle(request: Request, mag_id: str, n: int, bucket: str):
+        """Count a reader request against its bucket (per account + IP; large images also per
+        account). Runs before the issue lookup, so probing hidden issues counts too."""
+        if is_admin(request):
+            return
+        name = request.state.user["name"]
+        checks = [(bucket, (name, client_ip(request)))]
+        if bucket == "img":
+            checks.append(("img_account", (name,)))
+        over = app.state.limiter.hit(checks)
+        if over:
+            log_access(request, mag_id, n, "limited:" + over[0])
+            raise HTTPException(429, guard.TOO_FAST, headers={"Retry-After": str(over[1])})
 
     def can_see(request: Request, mag_id: str) -> bool:
         """Readers can be limited to some issues (auth.json `mags`); admins see everything."""
@@ -325,6 +350,7 @@ def create_app(cfg: Config, engine=None) -> FastAPI:
 
     @app.get("/api/mag/{mag_id}/page/{n}.png")
     def page_png(mag_id: str, n: int, request: Request, w: int = 1600):
+        throttle(request, mag_id, n, "thumb" if w <= 360 else "img")
         m = mag_or_404(mag_id, request)
         w = 360 if w <= 360 else 1600 if w <= 1600 else 2400
         pub = published_image(cfg, mag_id, n, w)
@@ -337,8 +363,11 @@ def create_app(cfg: Config, engine=None) -> FastAPI:
 
     @app.get("/api/mag/{mag_id}/page/{n}")
     def page_data(mag_id: str, n: int, request: Request, ensure: bool = True):
+        throttle(request, mag_id, n, "data")
         mag_or_404(mag_id, request)
         admin = is_admin(request)
+        if not admin:
+            log_access(request, mag_id, n, "view")
         if ensure and admin:  # readers never trigger (paid) model calls
             jobs.ensure(mag_id, n)
             jobs.prefetch(mag_id, n)
@@ -400,8 +429,8 @@ def create_app(cfg: Config, engine=None) -> FastAPI:
     # ------------------------------------------------------------------ feedback
     # One JSON object per line in <data_dir>/feedback.jsonl. It only exists on the server (sync.sh
     # never uploads or overwrites it), like auth.json.
-    feedback_file = cfg.data_dir / "feedback.jsonl"
-    feedback_lock = threading.Lock()  # sync handlers run in a thread pool
+    feedback_file = guard.JsonlFile(cfg.data_dir / "feedback.jsonl")
+    feedback_lock = threading.Lock()  # guards feedback_posts; sync handlers run in a thread pool
     # (user name, client IP) -> recent post times (monotonic). Keyed by IP too because the public
     # trial account is shared: one visitor hitting the limit must not silence everyone else on it.
     feedback_posts: dict[tuple[str, str], list[float]] = {}
@@ -420,46 +449,29 @@ def create_app(cfg: Config, engine=None) -> FastAPI:
         if len(text) > FEEDBACK_MAX_CHARS:
             raise HTTPException(400, f"最多 {FEEDBACK_MAX_CHARS} 字")
         name, now = request.state.user["name"], time.monotonic()
-        key = (name, request.client.host if request.client else "?")
-        entry = {"time": datetime.now(timezone.utc).isoformat(timespec="seconds"), "user": name,
+        key = (name, client_ip(request))
+        entry = {"time": guard.utc_now(), "user": name,
                  "mag_id": mag_id, "title": m["title"], "page": page, "text": text}
         with feedback_lock:
             recent = [t for t in feedback_posts.get(key, []) if now - t < FEEDBACK_WINDOW]
             if len(recent) >= FEEDBACK_MAX_POSTS:
                 feedback_posts[key] = recent
                 raise HTTPException(429, "反馈太频繁了，请过一会儿再发")
-            feedback_file.parent.mkdir(parents=True, exist_ok=True)
-            line = json.dumps(entry, ensure_ascii=False) + "\n"
-            with feedback_file.open("ab+") as f:
-                if f.tell():  # a write cut short earlier must not swallow this entry too
-                    f.seek(-1, 2)
-                    if f.read(1) != b"\n":
-                        line = "\n" + line
-                f.write(line.encode("utf-8"))
+            feedback_file.append(entry)
             feedback_posts[key] = recent + [now]
         return {"ok": True}
 
     @app.get("/api/feedback")
     def feedback_list(limit: int = FEEDBACK_LIST_DEFAULT):
         limit = max(1, min(limit, FEEDBACK_LIST_MAX))
-        with feedback_lock:
-            try:
-                # split on \n only: splitlines() would also break on U+2028 / U+0085 inside a text,
-                # which json.dumps(ensure_ascii=False) leaves unescaped
-                lines = feedback_file.read_text(encoding="utf-8").split("\n")
-            except FileNotFoundError:
-                lines = []
-        out = []
-        for line in reversed(lines):  # appended in time order, so newest is last
-            try:
-                entry = json.loads(line)
-            except ValueError:
-                continue  # skip a truncated or hand-edited line rather than failing the whole list
-            if isinstance(entry, dict):
-                out.append(entry)
-                if len(out) >= limit:
-                    break
-        return {"feedback": out}
+        return {"feedback": feedback_file.entries()[::-1][:limit]}  # appended in time order -> newest first
+
+    # ------------------------------------------------------------------ access log (admin only)
+    # <data_dir>/access.jsonl: one line per reader page view and per 429. Server-only, like feedback.
+    @app.get("/api/access/summary")
+    def access_summary(hours: int = guard.SUMMARY_DEFAULT_HOURS):
+        hours = max(1, min(hours, guard.SUMMARY_MAX_HOURS))
+        return guard.summarize(access_log.entries(include_old=True), hours)
 
     web = ROOT / "web"
     app.mount("/", StaticFiles(directory=web, html=True), name="web")

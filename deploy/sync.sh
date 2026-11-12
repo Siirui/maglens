@@ -4,7 +4,7 @@
 #   deploy/sync.sh ubuntu@服务器IP 2026.12      # 只导出标题包含 2026.12 的（已上传的其他期不受影响）
 #
 # 要求：ssh 用户能免密 sudo（腾讯云/阿里云的 ubuntu 默认如此）。远端文件一律以 maglens 用户写入，
-# 所以服务读写数据库不会有权限问题。auth.json（账号）和 feedback.jsonl（读者反馈）只在服务器上维护，不会被覆盖。
+# 所以服务读写数据库不会有权限问题。auth.json（账号）、feedback.jsonl（读者反馈）和 access.jsonl(.1)（访问记录）只在服务器上维护，不会被覆盖。
 set -euo pipefail
 HOST=${1:?用法: deploy/sync.sh user@server [标题关键字...]}
 shift
@@ -26,7 +26,7 @@ rsync -az --delete --rsync-path "sudo -u maglens rsync" \
 ssh "$HOST" "sudo -u maglens $APP/.venv/bin/pip install -q -r $APP/requirements.txt"
 
 echo "== 上传页面图和数据库（增量）"
-rsync -az --stats --rsync-path "sudo -u maglens rsync" --exclude auth.json --exclude feedback.jsonl "$OUT"/ "$HOST:$DATA/" \
+rsync -az --stats --rsync-path "sudo -u maglens rsync" --exclude auth.json --exclude feedback.jsonl --exclude 'access.jsonl*' "$OUT"/ "$HOST:$DATA/" \
   | grep -E "Number of files transferred|Total transferred file size" || true
 
 echo "== 重启"

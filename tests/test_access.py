@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from fastapi.testclient import TestClient  # noqa: E402
 from make_sample import build_pdf, page1, page2, page3  # noqa: E402
 
-from maglens import extract, publish  # noqa: E402
+from maglens import extract, guard, publish  # noqa: E402
 from maglens.auth import Auth, hash_password, verify_password  # noqa: E402
 from maglens.config import load_config  # noqa: E402
 from maglens.server import create_app  # noqa: E402
@@ -478,3 +478,188 @@ def test_feedback_without_accounts_is_local_admin(libdir, tmp_path):
     assert c.get("/api/feedback").json() == {"feedback": []}                  # no file yet
     assert c.post("/api/feedback", json={"mag_id": jan, "page": 0, "text": "ok"}).status_code == 200
     assert c.get("/api/feedback").json()["feedback"][0]["user"] == "本机"
+
+
+# ---------------------------------------------------------------------- rate limits + access log
+class Clock:
+    def __init__(self):
+        self.t = 1000.0
+
+    def __call__(self):
+        return self.t
+
+
+def guarded_app(libdir, tmp_path):
+    """Small limits and a hand-driven clock, so the tests never sleep."""
+    app, store = make_app(libdir, tmp_path, users=[("boss", "admin"), ("amy", "reader"), ("trial", "reader")])
+    clock = Clock()
+    app.state.limiter = guard.RateLimiter({
+        "img": [(3, 60), (5, 3600)], "thumb": [(4, 600)], "data": [(3, 60), (5, 3600)],
+        "img_account": [(7, 3600)]}, clock=clock)
+    return app, store, clock
+
+
+def access_lines(tmp_path):
+    return [json.loads(x) for x in (tmp_path / "access.jsonl").read_text(encoding="utf-8").splitlines()]
+
+
+def test_default_limits_fit_normal_reading():
+    """The shipped numbers leave room for fast desktop reading: 30 spreads in one minute."""
+    clock = Clock()
+    lim = guard.RateLimiter(clock=clock)
+    for _ in range(30):                                   # 2 new images + 2 page data per turn
+        for _ in range(2):
+            assert lim.hit([("img", ("amy", "1.2.3.4")), ("img_account", ("amy",))]) is None
+            assert lim.hit([("data", ("amy", "1.2.3.4"))]) is None
+        clock.t += 2
+    for _ in range(180):                                  # a whole issue's thumbnail strip
+        assert lim.hit([("thumb", ("amy", "1.2.3.4"))]) is None
+
+
+@pytest.mark.parametrize("path,bucket", [("/api/mag/{m}/page/{n}.png?w=1600", "img"),
+                                         ("/api/mag/{m}/page/{n}.png", "img"),
+                                         ("/api/mag/{m}/page/{n}.png?w=360", "thumb"),
+                                         ("/api/mag/{m}/page/{n}", "data")])
+def test_reader_hits_each_limit(libdir, tmp_path, path, bucket):
+    app, store, clock = guarded_app(libdir, tmp_path)
+    jan, _ = ids(store)
+    amy, boss = TestClient(app), TestClient(app)
+    login(amy, "amy"), login(boss, "boss")
+    limit, window = app.state.limiter.rules[bucket][0]
+    url = lambda n: path.format(m=jan, n=n % 3)
+    for i in range(limit):
+        assert amy.get(url(i)).status_code == 200, i
+        clock.t += 1
+    r = amy.get(url(0))
+    assert r.status_code == 429 and r.json() == {"detail": "看得太快了，休息一下再继续"}
+    assert r.headers["Retry-After"] == str(window - limit)  # until the first hit leaves the window
+    assert amy.get(url(0)).status_code == 429             # rejected requests don't extend the wait
+    clock.t += int(r.headers["Retry-After"])
+    assert amy.get(url(0)).status_code == 200
+    for _ in range(20):                                   # the admin is never limited
+        assert boss.get(url(0)).status_code == 200
+    ev = [e for e in access_lines(tmp_path) if e["event"].startswith("limited")]
+    assert len(ev) == 2 and ev[0]["event"] == "limited:" + bucket and ev[0]["user"] == "amy"
+    assert ev[0]["ip"] == "testclient" and ev[0]["mag_id"] == jan and ev[0]["page"] == 0
+
+
+def test_hourly_limit_and_probing_counts(libdir, tmp_path):
+    app, store, clock = guarded_app(libdir, tmp_path)
+    jan, feb = ids(store)
+    Auth(tmp_path / "auth.json").set_mags("trial", [jan])
+    trial = TestClient(app)
+    login(trial, "trial")
+    assert trial.get(f"/api/mag/{feb}/page/0").status_code == 404     # hidden issue: still counted
+    assert trial.get("/api/mag/nope/page/0").status_code == 404
+    for _ in range(3):                                    # spaced out: never hits the per-minute rule
+        clock.t += 61
+        assert trial.get(f"/api/mag/{jan}/page/0").status_code == 200
+    r = trial.get(f"/api/mag/{jan}/page/1")
+    assert r.status_code == 429 and int(r.headers["Retry-After"]) == 3600 - 3 * 61
+    # only real views are logged as views; the probes are not
+    views = [e for e in access_lines(tmp_path) if e["event"] == "view"]
+    assert [(e["mag_id"], e["page"]) for e in views] == [(jan, 0)] * 3
+
+
+def test_per_account_ceiling_across_ips(libdir, tmp_path):
+    app, store, clock = guarded_app(libdir, tmp_path)
+    jan, _ = ids(store)
+    a, b, c = (TestClient(app, client=(ip, 5000)) for ip in ("198.51.100.1", "198.51.100.2", "198.51.100.3"))
+    for x in (a, b, c):
+        login(x, "trial")
+    got = []
+    for i in range(9):
+        clock.t += 61                                     # nobody trips a per-minute rule
+        got.append((a, b, c)[i % 3].get(f"/api/mag/{jan}/page/{i % 3}.png").status_code)
+    assert got == [200] * 7 + [429] * 2                   # each IP is at 3/h at most; the account isn't
+    amy = TestClient(app, client=("198.51.100.1", 5000))  # other accounts on the same IP are fine
+    login(amy, "amy")
+    assert amy.get(f"/api/mag/{jan}/page/0.png").status_code == 200
+    assert a.get(f"/api/mag/{jan}/page/0.png?w=360").status_code == 200   # thumbnails aren't capped
+    assert {e["event"] for e in access_lines(tmp_path)} == {"limited:img_account"}
+
+
+def test_access_log_and_rotation(libdir, tmp_path):
+    app, store, clock = guarded_app(libdir, tmp_path)
+    jan, _ = ids(store)
+    amy, boss = TestClient(app), TestClient(app)
+    login(amy, "amy"), login(boss, "boss")
+    assert amy.get(f"/api/mag/{jan}/page/1").status_code == 200
+    assert amy.get(f"/api/mag/{jan}/page/1.png").status_code == 200      # images aren't logged
+    assert boss.get(f"/api/mag/{jan}/page/2").status_code == 200         # admins aren't logged
+    [e] = access_lines(tmp_path)
+    assert set(e) == {"time", "user", "ip", "mag_id", "page", "event"}
+    assert (e["user"], e["ip"], e["mag_id"], e["page"], e["event"]) == ("amy", "testclient", jan, 1, "view")
+    assert e["time"].endswith("+00:00")
+
+    app.state.access_log.max_bytes = 300
+    for i in range(8):
+        clock.t += 3600
+        assert amy.get(f"/api/mag/{jan}/page/{i % 3}").status_code == 200
+    cur, old = tmp_path / "access.jsonl", tmp_path / "access.jsonl.1"
+    assert old.exists() and not (tmp_path / "access.jsonl.2").exists()
+    assert old.stat().st_size > 300 and cur.stat().st_size <= 300 + 200
+    kept = len(cur.read_text().splitlines()) + len(old.read_text().splitlines())
+    assert 1 < kept < 9                                   # one old file is kept, older lines dropped
+    assert boss.get("/api/access/summary").json()["users"]["amy"]["views"] == kept  # reads both files
+
+
+def test_access_summary(libdir, tmp_path):
+    app, store, clock = guarded_app(libdir, tmp_path)
+    jan, _ = ids(store)
+    admin, amy, anon = TestClient(app), TestClient(app), TestClient(app)
+    t1, t2 = TestClient(app, client=("198.51.100.1", 5000)), TestClient(app, client=("198.51.100.2", 5000))
+    for c, n in ((admin, "boss"), (amy, "amy"), (t1, "trial"), (t2, "trial")):
+        login(c, n)
+    old = {"time": "2020-01-01T00:00:00+00:00", "user": "amy", "ip": "x", "mag_id": jan, "page": 0, "event": "view"}
+    (tmp_path / "access.jsonl").write_text(json.dumps(old) + "\n" + '{"broken\n', encoding="utf-8")
+    for n in (0, 0, 1):
+        assert t1.get(f"/api/mag/{jan}/page/{n}").status_code == 200
+    for _ in range(3):
+        assert t2.get(f"/api/mag/{jan}/page/2").status_code == 200
+    assert t2.get(f"/api/mag/{jan}/page/2").status_code == 429
+    assert amy.get(f"/api/mag/{jan}/page/2").status_code == 200
+
+    assert anon.get("/api/access/summary").status_code == 401
+    assert amy.get("/api/access/summary").status_code == 403
+    r = admin.get("/api/access/summary")
+    assert r.status_code == 200
+    s = r.json()
+    assert s["hours"] == 24 and set(s["users"]) == {"trial", "amy"}   # the 2020 line is outside 24h
+    t = s["users"]["trial"]
+    assert {k: t[k] for k in ("views", "distinct_pages", "ips", "limited")} == {
+        "views": 6, "distinct_pages": 3, "ips": 2, "limited": 1}
+    assert t["last_seen"].endswith("+00:00")
+    assert s["users"]["amy"]["views"] == 1 and s["users"]["amy"]["limited"] == 0
+    [lim] = s["recent_limited"]
+    assert (lim["user"], lim["ip"], lim["event"], lim["page"]) == ("trial", "198.51.100.2", "limited:data", 2)
+    assert admin.get("/api/access/summary?hours=0").json()["hours"] == 1
+    assert admin.get("/api/access/summary?hours=999999").json()["hours"] == 168
+
+
+def test_summary_recent_limited_is_newest_20():
+    from datetime import datetime, timezone
+    es = [{"time": f"2026-11-11T00:{i:02d}:00+00:00", "user": "u", "ip": "i", "mag_id": "m", "page": i,
+           "event": "limited:img"} for i in range(30)]
+    s = guard.summarize(es, 24, now=datetime(2026, 11, 11, 12, tzinfo=timezone.utc))
+    assert [e["page"] for e in s["recent_limited"]] == list(range(29, 9, -1))
+    assert s["users"]["u"]["limited"] == 30 and s["users"]["u"]["last_seen"] == "2026-11-11T00:29:00+00:00"
+
+
+def test_limiter_prunes_idle_keys():
+    clock = Clock()
+    lim = guard.RateLimiter({"img": [(2, 60)], "data": [(2, 3600)]}, clock=clock)
+    for i in range(100):
+        assert lim.hit([("img", ("u", f"10.0.0.{i}"))]) is None
+    assert lim.hit([("data", ("u", "x"))]) is None
+    assert len(lim) == 101
+    clock.t += 61
+    assert lim.hit([("img", ("u", "fresh"))]) is None     # the sweep runs on the next request
+    assert len(lim) == 2                                  # idle img keys gone; the hourly one stays
+    clock.t += 3600
+    lim.hit([("img", ("u", "fresh"))])
+    assert len(lim) == 1
+    for _ in range(500):                                  # a busy key holds one window's worth at most
+        lim.hit([("img", ("u", "busy"))])
+        clock.t += 31
+    assert len(lim._hits[("img", ("u", "busy"))]) <= 2
