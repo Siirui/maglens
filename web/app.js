@@ -2,8 +2,17 @@
 const $ = (s, el = document) => el.querySelector(s);
 const api = (p, opt) => fetch(p, opt).then(r => {
   if (r.status === 401) { location.href = "/login.html"; throw new Error("login required"); }
-  if (!r.ok) throw new Error(r.status); return r.json();
+  if (!r.ok) throw Object.assign(new Error(r.status), { status: r.status, retry: retryAfter(r) });
+  return r.json();
 });
+// Reader rate limit (server: 429 + Retry-After). Seconds to wait, capped so a page never waits too long.
+const retryAfter = r => Math.min(60, Math.max(2, +(r.headers.get("Retry-After") || 5)));
+function slowDown(sec) {
+  let t = $("#slowdown");
+  if (!t) { t = document.createElement("div"); t.id = "slowdown"; t.setAttribute("role", "status"); document.body.appendChild(t); }
+  t.textContent = `看得太快了，休息 ${sec} 秒再继续`;
+  t.hidden = false; clearTimeout(t._h); t._h = setTimeout(() => { t.hidden = true; }, Math.min(sec, 8) * 1000);
+}
 // ---------------------------------------------------------------- user / role
 const ME = { user: null, auth: false, model: true };
 const isAdmin = () => ME.user?.role === "admin";
@@ -471,7 +480,9 @@ function prefetchAhead(vis) {
     const url = `/api/mag/${S.mag.id}/page/${n}.png?w=${S.imgW || 1600}`;
     if (prefetched.has(url)) continue;
     prefetched.add(url);
-    new Image().src = url;
+    const im = new Image();
+    im.onerror = () => prefetched.delete(url);  // e.g. rate limited: try again on a later page turn
+    im.src = url;
   }
 }
 
@@ -492,6 +503,7 @@ function render() {
   $("#pages").classList.toggle("showboxes", S.boxes);
   $("#pages").classList.toggle("selecting", S.selecting);
   document.querySelectorAll(".pg").forEach(bindSelect);
+  document.querySelectorAll(".pg img").forEach(img => img.addEventListener("error", () => retryImage(img)));
   fitPages();
   prefetchAhead(vis);
   // thumbs
@@ -506,13 +518,33 @@ function render() {
   vis.forEach(loadPage);
 }
 
+// A page image that failed: if it was the rate limit, tell the reader and load it again once allowed.
+async function retryImage(img) {
+  const url = img.getAttribute("src");
+  if (!url || img._retrying === url) return;
+  let r; try { r = await fetch(url, { cache: "no-store" }); } catch { return; }  // only after a failure
+  if (r.status !== 429 || !img.isConnected) return;
+  const sec = retryAfter(r);
+  img._retrying = url; slowDown(sec);
+  img.classList.add("waiting");  // hide the browser's broken-image icon meanwhile
+  img.addEventListener("load", () => img.classList.remove("waiting"), { once: true });
+  setTimeout(() => { if (img.isConnected && img.getAttribute("src") === url) { img._retrying = null; img.src = url; } }, sec * 1000);
+}
+
 async function loadPage(n) {
   clearTimeout(S.polls[n]);
   const sec = $(`.psec[data-page="${n}"]`);
   if (!sec) return;
   let r;
   try { r = await api(`/api/mag/${S.mag.id}/page/${n}`); }
-  catch (e) { sec.innerHTML = `<div class="err">加载失败：${e.message}</div>`; return; }
+  catch (e) {
+    if (e.status === 429) {  // reading too fast: say so, then load it by itself once allowed
+      sec.innerHTML = `<div class="empty">看得太快了，稍等一下译文就出来…</div>`;
+      slowDown(e.retry); S.polls[n] = setTimeout(() => loadPage(n), e.retry * 1000);
+      return;
+    }
+    sec.innerHTML = `<div class="err">加载失败：${e.message}</div>`; return;
+  }
   if (!visiblePages().includes(n)) return;
   if (r.status === "done") {
     S.data[n] = r.data; drawPanel(n, r); drawBoxes(n); markThumb(n);

@@ -389,3 +389,9 @@ html.sheet-ui.vv-zoomed #stage, html.sheet-ui.vv-zoomed #panel, html.sheet-ui #s
 #swipe-hint.out { opacity: 0; }
 @keyframes swipe-hint-in { from { opacity: 0; transform: translate(-50%, 6px); } }
 @media (prefers-reduced-motion: reduce) { #swipe-hint { animation: none; transition: none; } }
+
+/* rate-limit notice ("看得太快了"): a quiet pill above everything, both layouts */
+#slowdown { position: fixed; left: 50%; top: calc(var(--top) + 12px); transform: translateX(-50%); z-index: 50;
+  background: var(--ink); color: var(--paper); font-size: 13px; padding: 7px 14px; border-radius: 999px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, .25); white-space: nowrap; pointer-events: none; }
+.pg img.waiting { visibility: hidden; }
