@@ -8,25 +8,37 @@ python tests/make_icons.py
   the corners itself.
 """
 import math
+import re
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright
 
 WEB = Path(__file__).resolve().parent.parent / "web"
-RED, CREAM, BLUE = "#E0442B", "#FFF8EC", "#2D5BE3"
-# icon A artwork, same geometry as web/favicon.svg (viewBox 0 0 96 96)
-ART = (f'<rect x="18" y="14" width="44" height="58" rx="5" fill="{CREAM}" transform="rotate(-7 42 44)"/>'
-       f'<circle cx="62" cy="60" r="21" fill="{BLUE}" stroke="{CREAM}" stroke-width="7"/>')
+FAVICON = (WEB / "favicon.svg").read_text(encoding="utf-8")
+# icon A (viewBox 0 0 96 96): the first element is the rounded red tile, the rest is the artwork (page + lens)
+_shapes = re.findall(r"<(?:rect|circle)\b[^>]*/>", FAVICON)
+TILE, ART = _shapes[0], "".join(_shapes[1:])
+RED = re.search(r'fill="([^"]+)"', TILE).group(1)
+
+
+def num(el, name, default=0.0):
+    m = re.search(rf'\b{name}="([-\d.]+)"', el)
+    return float(m.group(1)) if m else default
 
 
 def art_extent():
     """Centre of the artwork's bounding box and the farthest artwork point from it (viewBox units)."""
-    a = math.radians(-7)
+    page = re.search(r"<rect\b[^>]*/>", ART).group(0)
+    circle = re.search(r"<circle\b[^>]*/>", ART).group(0)
+    deg, ox, oy = map(float, re.search(r"rotate\(([-\d.]+) ([-\d.]+) ([-\d.]+)\)", page).groups())
+    x0, y0 = num(page, "x"), num(page, "y")
+    x1, y1 = x0 + num(page, "width"), y0 + num(page, "height")
+    a = math.radians(deg)
     pts = []
-    for x, y in ((18, 14), (62, 14), (62, 72), (18, 72)):  # page corners (ignoring rx: conservative)
-        dx, dy = x - 42, y - 44
-        pts.append((42 + dx * math.cos(a) - dy * math.sin(a), 44 + dx * math.sin(a) + dy * math.cos(a)))
-    lens = (62, 60, 21 + 3.5)  # radius + half the stroke
+    for x, y in ((x0, y0), (x1, y0), (x1, y1), (x0, y1)):  # page corners (ignoring rx: conservative)
+        dx, dy = x - ox, y - oy
+        pts.append((ox + dx * math.cos(a) - dy * math.sin(a), oy + dx * math.sin(a) + dy * math.cos(a)))
+    lens = (num(circle, "cx"), num(circle, "cy"), num(circle, "r") + num(circle, "stroke-width") / 2)
     xs = [p[0] for p in pts] + [lens[0] - lens[2], lens[0] + lens[2]]
     ys = [p[1] for p in pts] + [lens[1] - lens[2], lens[1] + lens[2]]
     cx, cy = (min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2
@@ -44,7 +56,7 @@ def main():
     s = 0.4 * 96 * 0.94 / far  # fit inside the 40%-radius safe circle with a little room
     maskable = (f'<rect width="96" height="96" fill="{RED}"/>'
                 f'<g transform="translate(48 48) scale({s:.4f}) translate({-cx:.3f} {-cy:.3f})">{ART}</g>')
-    favicon = (WEB / "favicon.svg").read_text(encoding="utf-8")
+    favicon = FAVICON
     jobs = [
         ("icon-192.png", favicon.replace("<svg ", '<svg width="192" height="192" ', 1), 192),
         ("icon-512.png", favicon.replace("<svg ", '<svg width="512" height="512" ', 1), 512),

@@ -887,11 +887,16 @@ async function pollProgress() {
 })();
 
 // ---------------------------------------------------------------- home screen
+// An installed iOS app has its own cookie jar, so a new tab (Safari) would not be logged in: export in place.
+if (navigator.standalone || matchMedia("(display-mode: standalone)").matches) {
+  $("#btn-export").removeAttribute("target"); $("#btn-export").setAttribute("download", "");
+}
 // iPhone Safari never offers to install, so the shelf says once how to add MagLens to the home screen.
-// navigator.standalone is false only in iOS WebKit outside a home-screen app; WeChat cannot add to the home screen.
+// Only real Safari: other iOS browsers and in-app web views (WeChat, QQ, Weibo...) lack "Safari/" or add their tag.
 (() => {
   const hint = $("#a2hs"), ua = navigator.userAgent;
-  if (!hint || !/iPhone|iPod/.test(ua) || navigator.standalone !== false || /MicroMessenger/i.test(ua) || store.get("a2hs", false)) return;
+  if (!hint || !/iPhone|iPod/.test(ua) || !/ Safari\//.test(ua) || /CriOS|FxiOS|EdgiOS|OPiOS|MicroMessenger|QQ\/|Weibo/i.test(ua) ||
+      navigator.standalone !== false || store.get("a2hs", false)) return;
   hint.hidden = false;
   hint.querySelector("button").onclick = () => { hint.hidden = true; store.set("a2hs", true); };
 })();
