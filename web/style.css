@@ -350,7 +350,7 @@ html.sheet-ui .phead { margin-top: 0; }
 
 /* phone reader bar: logo, issue, 中文/对照/原文, 点读, 退出 must fit 360px without scrolling */
 html.sheet-ui #bar.reading { gap: 6px; padding: 0 8px; }
-html.sheet-ui #bar.reading #crumb { flex: 0 1 auto; min-width: 0; }
+html.sheet-ui #bar.reading #crumb { flex: 0 1 auto; min-width: 56px; }
 html.sheet-ui #bar.reading #magsel, html.sheet-ui #bar.reading #magname { font-size: 14px; padding: 3px 2px; }
 html.sheet-ui #bar.reading #tools { gap: 6px; }
 html.sheet-ui #bar.reading .seg button { padding: 4px 7px; }

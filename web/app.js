@@ -25,6 +25,7 @@ function setUser(user, auth, model = ME.model) {
 // (mix-blend-mode would force extra compositing layers on iOS and interact with the box highlights).
 function setWatermark(text) {
   const root = document.documentElement;
+  text = text.replace(/[\u0000-\u001f\u007f\ufffe\uffff]/g, "");  // not allowed in XML: the SVG would fail to parse
   root.classList.toggle("has-wm", !!text);
   if (!text) return root.style.removeProperty("--wm");
   // squeeze long (e.g. CJK) names so they stay inside the 400x260 tile
@@ -785,8 +786,9 @@ function fillMagSelect() {
   const sel = $("#magsel"), name = $("#magname"), mags = P.last?.magazines;
   if (!S.mag) return;
   // until /api/progress has answered we don't know whether this is a dropdown or plain text: show neither
-  if (!mags) { sel.hidden = name.hidden = true; return; }
-  let list = [...mags].sort(byIssue);
+  // (if it failed, fall back to the open issue alone)
+  if (!mags && !P.failed) { sel.hidden = name.hidden = true; return; }
+  let list = mags ? [...mags].sort(byIssue) : [{ id: S.mag.id, title: S.mag.title, done: 0, pages: S.mag.pages, available: true }];
   if (!isAdmin()) list = list.filter(m => m.available || m.id === S.mag.id);
   const withSeries = m => ({ ...m, series: m.series || S.mag.series });
   // short labels must stay unique: 2025年11月号 vs 2026年11月号 keep the year, two series in the same month the series
@@ -811,13 +813,19 @@ function fillMagSelect() {
     return `<option value="${m.id}" title="${esc(l.full)}" aria-label="${esc(l.full)}"${m.id === S.mag.id ? " selected" : ""}>` +
       esc(l.text) + `</option>`;
   }).join("");
-  sel.setAttribute("aria-label", label(list.find(m => m.id === S.mag.id) || S.mag).full);
+  sel.setAttribute("aria-label", "切换杂志：" + label(list.find(m => m.id === S.mag.id) || S.mag).full);
 }
 $("#magsel").onchange = e => { location.hash = `#/m/${e.target.value}`; };
+$("#magsel").addEventListener("blur", () => { if (S.mag && !$("#reader").hidden) fillMagSelect(); });  // skipped while focused
 
 async function pollProgress() {
   let p;
-  try { p = await api("/api/progress"); } catch { return setTimeout(pollProgress, 10000); }
+  try { p = await api("/api/progress"); }
+  catch {
+    // no list of issues yet: at least name the open one (plain text) instead of leaving the bar blank
+    if (!P.last && !P.failed) { P.failed = true; if (S.mag && !$("#reader").hidden) fillMagSelect(); }
+    return setTimeout(pollProgress, 10000);
+  }
   const prev = P.last; P.last = p;
   if (!isAdmin()) {
     $("#progress").hidden = true; document.documentElement.classList.remove("has-progress");
