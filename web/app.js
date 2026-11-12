@@ -18,6 +18,23 @@ function setUser(user, auth, model = ME.model) {
   if ($("#logout")) $("#logout").onclick = async () => { await fetch("/api/logout", { method: "POST" }); location.href = "/login.html"; };
   if ($("#btn-users")) $("#btn-users").onclick = openUsers;
   if ($("#btn-fb")) $("#btn-fb").onclick = openFeedback;
+  setWatermark(auth && user ? `${user.name} · ${location.host}` : "");
+}
+// Faint diagonal "account · host" tiled over the page images: discourages reposting screenshots (not DRM).
+// White glyphs with a dark outline at low opacity read on both light and dark pages, with no blend mode
+// (mix-blend-mode would force extra compositing layers on iOS and interact with the box highlights).
+function setWatermark(text) {
+  const root = document.documentElement;
+  root.classList.toggle("has-wm", !!text);
+  if (!text) return root.style.removeProperty("--wm");
+  const x = s => s.replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`);
+  // squeeze long (e.g. CJK) names so they stay inside the 400x260 tile
+  const wide = [...text].reduce((w, c) => w + (c.codePointAt(0) > 0x2e7f ? 1 : .6), 0) * 22 > 340;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="400" height="260" viewBox="0 0 400 260">` +
+    `<g transform="rotate(-28 200 130)" font-family="sans-serif" font-weight="700" font-size="22" text-anchor="middle" ` +
+    `fill="#fff" stroke="#000" stroke-width="1.4" paint-order="stroke">` +
+    `<text x="200" y="138"${wide ? ` textLength="340" lengthAdjust="spacingAndGlyphs"` : ""}>${x(text)}</text></g></svg>`;
+  root.style.setProperty("--wm", `url("data:image/svg+xml,${encodeURIComponent(svg)}")`);
 }
 const esc = s => (s || "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const store = {
@@ -265,6 +282,7 @@ function render() {
   $("#pages").innerHTML = order.map(n => `
     <div class="pg" data-page="${n}">
       <img src="/api/mag/${S.mag.id}/page/${n}.png?w=${S.imgW || 1600}" draggable="false">
+      <div class="wm" aria-hidden="true"></div>
       <div class="ov"></div>
     </div>`).join("");
   $("#pages").classList.toggle("showboxes", S.boxes);
@@ -762,18 +780,37 @@ function fmtDur(s) {
   const h = Math.floor(s / 3600), m = Math.round((s % 3600) / 60);
   return h ? `${h} 小时 ${m} 分` : `${m} 分钟`;
 }
+// phones show only the issue ("11月号"); the full "POPEYE 2026年11月号" stays in title / aria-label
+const shortIssue = m => { const k = issueKey(m.title); return k ? `${k % 100}月号` : issueName(m); };
 function fillMagSelect() {
-  const sel = $("#magsel"), mags = P.last?.magazines;
+  const sel = $("#magsel"), name = $("#magname"), mags = P.last?.magazines;
   if (!S.mag) return;
   let list = mags ? [...mags].sort(byIssue) : [{ id: S.mag.id, title: S.mag.title, done: 0, pages: S.mag.pages, available: true }];
   if (!isAdmin()) list = list.filter(m => m.available || m.id === S.mag.id);
+  const short = sheetOn();
+  const label = m => {
+    const mm = { ...m, series: m.series || S.mag.series }, full = `${seriesName(mm)} ${issueName(mm)}`;
+    return { full, text: (short ? shortIssue(mm) : full) + (isAdmin() && !m.available ? `（${m.done}/${m.pages}）` : "") };
+  };
+  // only one issue to choose from (e.g. the public trial account): plain text instead of a dropdown
+  const single = list.length < 2;
+  sel.hidden = single; name.hidden = !single;
+  if (single) {
+    const l = label(list[0] || S.mag);
+    name.textContent = l.text; name.title = l.full;
+    sel.innerHTML = "";
+    return;
+  }
   sel.innerHTML = list.map(m => {
-    const mm = { ...m, series: m.series || S.mag.series };
-    return `<option value="${m.id}" ${m.id === S.mag.id ? "selected" : ""}>` + esc(`${seriesName(mm)} ${issueName(mm)}`) +
-      (isAdmin() && !m.available ? `（${m.done}/${m.pages}）` : "") + `</option>`;
+    const l = label(m);
+    return `<option value="${m.id}" title="${esc(l.full)}" aria-label="${esc(l.full)}"${m.id === S.mag.id ? " selected" : ""}>` +
+      esc(l.text) + `</option>`;
   }).join("");
+  sel.setAttribute("aria-label", label(list.find(m => m.id === S.mag.id) || S.mag).full);
 }
 $("#magsel").onchange = e => { location.hash = `#/m/${e.target.value}`; };
+// phone <-> wide layout: rebuild the labels (short on phones)
+SHEET.mq.addEventListener("change", () => { if (S.mag && document.activeElement?.id !== "magsel") fillMagSelect(); });
 
 async function pollProgress() {
   let p;

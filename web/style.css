@@ -112,6 +112,10 @@ button.primary { background: var(--accent); border-color: var(--accent); color: 
 .pg { position: relative; flex: none; box-shadow: 0 4px 30px rgba(0,0,0,.5); background: #fff; }
 .pg img { height: 100%; width: 100%; display: block; user-select: none; -webkit-user-drag: none; }
 .ov { position: absolute; inset: 0; }
+/* per-account watermark (app.js setWatermark): two tiles across the page, so it scales with the page */
+.pg .wm { display: none; position: absolute; inset: 0; pointer-events: none; user-select: none; -webkit-user-select: none;
+  background-image: var(--wm); background-size: 50% auto; background-repeat: repeat; background-position: 0 0; opacity: .07; }
+html.has-wm .pg .wm { display: block; }
 .bx { position: absolute; border: 1.5px solid transparent; border-radius: 2px; cursor: pointer; transition: background .12s; }
 .showboxes .bx { border-color: rgba(210, 69, 45, .55); }
 .bx:hover { background: var(--accent-soft); }
@@ -227,7 +231,8 @@ dialog small { color: var(--ink3); font-weight: 400; }
 #magsel { font: inherit; font-weight: 600; color: var(--ink); background: transparent; border: 1px solid transparent;
   border-radius: 6px; padding: 3px 4px; max-width: 100%; cursor: pointer; }
 #magsel:hover { border-color: var(--line); }
-#bar:not(.reading) #magsel { display: none; }
+#bar:not(.reading) #magsel, #bar:not(.reading) #magname { display: none; }
+#magname { display: inline-block; padding: 3px 4px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; vertical-align: middle; }
 .card.running .t::after { content: " · 翻译中"; color: var(--accent); font-weight: 400; font-size: 12px; }
 #thumbs img.running { outline: 2px dashed var(--accent); outline-offset: -2px; }
 @media (max-width: 720px) { #progress .ptext { font-size: 11px; } }
@@ -342,3 +347,12 @@ html.sheet-ui .phead { margin-top: 0; }
   #right { min-width: 0; }
   #panel { padding: 12px 18px 48px; }
 }
+
+/* phone reader bar: logo, issue, 中文/对照/原文, 点读, 退出 must fit 360px without scrolling */
+html.sheet-ui #bar.reading { gap: 6px; padding: 0 8px; }
+html.sheet-ui #bar.reading #crumb { flex: 0 1 auto; min-width: 0; }
+html.sheet-ui #bar.reading #magsel, html.sheet-ui #bar.reading #magname { font-size: 14px; padding: 3px 2px; }
+html.sheet-ui #bar.reading #tools { gap: 6px; }
+html.sheet-ui #bar.reading .seg button { padding: 4px 7px; }
+html.sheet-ui #bar.reading #btn-tap { padding: 4px 8px; }
+html.sheet-ui #bar.reading #user button { padding: 2px 6px; }
