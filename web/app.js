@@ -1008,7 +1008,7 @@ const pct = (a, b) => b ? (100 * a / b) : 0;
 const issueKey = t => { const m = t.match(/(20\d\d)\D{0,3}?(\d{1,2})(?!\d)/); return m ? +m[1] * 100 + +m[2] : 0; };
 const byIssue = (a, b) => issueKey(b.title) - issueKey(a.title) || a.title.localeCompare(b.title);
 // "popeye2026.11" / "POPEYE 2026.08 " / "2026年 06月号" -> "2026年11月号"; undated -> what follows the series name
-const seriesName = m => (m.series || "").toUpperCase() || "杂志";
+const seriesName = m => (/^\d/.test(m.series || "") ? m.series : (m.series || "").toUpperCase()) || "杂志";  // "2nd" stays lowercase
 function issueName(m) {
   const k = issueKey(m.title);
   if (k) return `${Math.floor(k / 100)}年${k % 100}月号`;

@@ -25,7 +25,10 @@ def file_id(path: Path) -> str:
 
 
 def guess_series(title: str) -> str:
-    """'POPEYE 2026年1月号' -> 'popeye'. Glossaries are shared per series."""
+    """'POPEYE 2026年1月号' -> 'popeye', '2nd 2026.11' -> '2nd'. Glossaries are shared per series."""
+    m = re.match(r"\s*(\d+(?:st|nd|rd|th))(?![A-Za-z])", title, re.I)  # names that start with a number
+    if m:
+        return m.group(1).lower()
     m = re.match(r"\s*([A-Za-z][A-Za-z&'. -]*?)(?:[\s_\-]*(?:\d|No|vol|Vol|第|$))", title)
     if m and m.group(1).strip():
         return m.group(1).strip().lower()

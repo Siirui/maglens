@@ -169,3 +169,12 @@ def test_runner_pauses_on_limit(tmp_path, pdf, monkeypatch):
     monkeypatch.setenv("FAKE_CLAUDE_MODE", "limit")
     with pytest.raises(cli_runner.LimitError):
         r.do_page(store.magazine("x"), 0)
+
+
+def test_guess_series():
+    from maglens.library import guess_series
+    assert guess_series("popeye2026.11") == "popeye"
+    assert guess_series("POPEYE 2026.08 ") == "popeye"
+    assert guess_series("BRUTUS No.1061") == "brutus"
+    assert guess_series("BRUTUS 特別編集") == "brutus"
+    assert guess_series("2nd 2026.11") == guess_series("2nd 2026.01") == "2nd"
