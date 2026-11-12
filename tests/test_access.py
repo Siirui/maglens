@@ -495,7 +495,7 @@ def guarded_app(libdir, tmp_path):
     clock = Clock()
     app.state.limiter = guard.RateLimiter({
         "img": [(3, 60), (5, 3600)], "thumb": [(4, 600)], "data": [(3, 60), (5, 3600)],
-        "img_account": [(7, 3600)]}, clock=clock)
+        "img_account": [(7, 3600)], "data_account": [(7, 3600)]}, clock=clock)
     return app, store, clock
 
 
@@ -539,8 +539,21 @@ def test_reader_hits_each_limit(libdir, tmp_path, path, bucket):
     for _ in range(20):                                   # the admin is never limited
         assert boss.get(url(0)).status_code == 200
     ev = [e for e in access_lines(tmp_path) if e["event"].startswith("limited")]
-    assert len(ev) == 2 and ev[0]["event"] == "limited:" + bucket and ev[0]["user"] == "amy"
+    assert len(ev) == 1 and ev[0]["event"] == "limited:" + bucket and ev[0]["user"] == "amy"
     assert ev[0]["ip"] == "testclient" and ev[0]["mag_id"] == jan and ev[0]["page"] == 0
+
+
+def test_hammering_after_429_logs_one_line_per_10s(libdir, tmp_path):
+    app, store, clock = guarded_app(libdir, tmp_path)
+    jan, _ = ids(store)
+    amy = TestClient(app)
+    login(amy, "amy")
+    for _ in range(3):
+        amy.get(f"/api/mag/{jan}/page/0")
+    for _ in range(50):                                   # 50 refusals in 25 s
+        assert amy.get(f"/api/mag/{jan}/page/0").status_code == 429
+        clock.t += 0.5
+    assert [e["event"] for e in access_lines(tmp_path)].count("limited:data") == 3   # t = 0, 10, 20 s
 
 
 def test_hourly_limit_and_probing_counts(libdir, tmp_path):
@@ -561,7 +574,8 @@ def test_hourly_limit_and_probing_counts(libdir, tmp_path):
     assert [(e["mag_id"], e["page"]) for e in views] == [(jan, 0)] * 3
 
 
-def test_per_account_ceiling_across_ips(libdir, tmp_path):
+@pytest.mark.parametrize("suffix,bucket", [(".png", "img_account"), ("", "data_account")])
+def test_per_account_ceiling_across_ips(libdir, tmp_path, suffix, bucket):
     app, store, clock = guarded_app(libdir, tmp_path)
     jan, _ = ids(store)
     a, b, c = (TestClient(app, client=(ip, 5000)) for ip in ("198.51.100.1", "198.51.100.2", "198.51.100.3"))
@@ -570,13 +584,39 @@ def test_per_account_ceiling_across_ips(libdir, tmp_path):
     got = []
     for i in range(9):
         clock.t += 61                                     # nobody trips a per-minute rule
-        got.append((a, b, c)[i % 3].get(f"/api/mag/{jan}/page/{i % 3}.png").status_code)
+        got.append((a, b, c)[i % 3].get(f"/api/mag/{jan}/page/{i % 3}{suffix}").status_code)
     assert got == [200] * 7 + [429] * 2                   # each IP is at 3/h at most; the account isn't
     amy = TestClient(app, client=("198.51.100.1", 5000))  # other accounts on the same IP are fine
     login(amy, "amy")
-    assert amy.get(f"/api/mag/{jan}/page/0.png").status_code == 200
+    assert amy.get(f"/api/mag/{jan}/page/0{suffix}").status_code == 200
     assert a.get(f"/api/mag/{jan}/page/0.png?w=360").status_code == 200   # thumbnails aren't capped
-    assert {e["event"] for e in access_lines(tmp_path)} == {"limited:img_account"}
+    assert {e["event"] for e in access_lines(tmp_path) if e["event"] != "view"} == {"limited:" + bucket}
+
+
+def test_ipv6_keyed_by_64(libdir, tmp_path):
+    assert guard.client_key("2001:db8:1:2:aaaa::1") == guard.client_key("2001:db8:1:2:bbbb::9") == "2001:db8:1:2::/64"
+    assert guard.client_key("2001:db8:1:3::1") != guard.client_key("2001:db8:1:2::1")
+    assert guard.client_key("::ffff:198.51.100.7") == guard.client_key("198.51.100.7") == "198.51.100.7"
+    assert guard.client_key("testclient") == "testclient"
+    app, store, clock = guarded_app(libdir, tmp_path)
+    jan, _ = ids(store)
+    got = []
+    for i in range(4):                                    # a new address in the same /64 each time
+        c = TestClient(app, client=(f"2001:db8:1:2::{i + 1}", 5000))
+        login(c, "trial")
+        got.append(c.get(f"/api/mag/{jan}/page/0").status_code)
+    assert got == [200, 200, 200, 429]
+    assert access_lines(tmp_path)[-1]["ip"] == "2001:db8:1:2::4"   # the log keeps the real address
+
+
+def test_access_log_failure_does_not_block_reading(libdir, tmp_path):
+    app, store, clock = guarded_app(libdir, tmp_path)
+    jan, _ = ids(store)
+    amy = TestClient(app)
+    login(amy, "amy")
+    app.state.access_log.path = tmp_path / "no-such-dir" / "file" / "access.jsonl"
+    (tmp_path / "no-such-dir").write_text("a file, so mkdir fails")
+    assert amy.get(f"/api/mag/{jan}/page/0").json()["status"] == "done"
 
 
 def test_access_log_and_rotation(libdir, tmp_path):
@@ -612,7 +652,9 @@ def test_access_summary(libdir, tmp_path):
     for c, n in ((admin, "boss"), (amy, "amy"), (t1, "trial"), (t2, "trial")):
         login(c, n)
     old = {"time": "2020-01-01T00:00:00+00:00", "user": "amy", "ip": "x", "mag_id": jan, "page": 0, "event": "view"}
-    (tmp_path / "access.jsonl").write_text(json.dumps(old) + "\n" + '{"broken\n', encoding="utf-8")
+    odd = {**old, "time": guard.utc_now(), "user": "odd", "ip": [1], "mag_id": {"x": 1}}   # hand-edited
+    (tmp_path / "access.jsonl").write_text(json.dumps(old) + "\n" + json.dumps(odd) + "\n" + '{"broken\n',
+                                           encoding="utf-8")
     for n in (0, 0, 1):
         assert t1.get(f"/api/mag/{jan}/page/{n}").status_code == 200
     for _ in range(3):
@@ -625,7 +667,7 @@ def test_access_summary(libdir, tmp_path):
     r = admin.get("/api/access/summary")
     assert r.status_code == 200
     s = r.json()
-    assert s["hours"] == 24 and set(s["users"]) == {"trial", "amy"}   # the 2020 line is outside 24h
+    assert s["hours"] == 24 and set(s["users"]) == {"trial", "amy", "odd"}   # 2020 is outside 24h
     t = s["users"]["trial"]
     assert {k: t[k] for k in ("views", "distinct_pages", "ips", "limited")} == {
         "views": 6, "distinct_pages": 3, "ips": 2, "limited": 1}

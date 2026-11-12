@@ -5,6 +5,7 @@ clock and the rules are plain attributes so tests can shrink them instead of sle
 """
 from __future__ import annotations
 
+import ipaddress
 import json
 import math
 import threading
@@ -20,9 +21,10 @@ from typing import Callable
 # page data (translation JSON) is fetched again every time a page is shown. An issue is ~180 pages.
 #
 # Large images (w > 360) and page data, per (account, IP):
-#   60 / minute  - skimming spreads at one turn every 2 s for a whole minute (2 new pages per turn),
-#                  plus a resize that re-requests the visible pages at 2400. Steady reading is far
-#                  below this; a script that pulls a page per second is not.
+#   120 / minute - skimming spreads at one turn per second for a whole minute (2 new pages per
+#                  turn), e.g. hunting for an article. Steady reading (a page every few seconds) is
+#                  far below this. Bursts aren't what makes scraping cheap, so this is loose; the
+#                  hourly rule is the one that bites.
 #   600 / hour   - reading a whole issue in an hour, even with zooming to 2400 or flipping back and
 #                  forth, stays around 200-400. A scraper needs ~180 pages x 1 width per issue, so
 #                  this caps it at about 3 issues' worth per hour per IP - and leaves a trail.
@@ -30,22 +32,38 @@ from typing import Callable
 #   400 / 10 minutes - the desktop strip lazy-loads every page of an issue (~180) plus the shelf
 #                  covers; even opening two issues and scrolling both strips end to end fits.
 #                  Thumbnails are too small to be worth scraping, so one loose rule is enough.
-# Large images per account, all IPs together:
+# Large images and page data per account, all IPs together:
 #   3000 / hour  - the public trial account is shared, so the per-IP rules alone could be farmed
 #                  from many IPs. 3000/h is ~10 people reading at full speed at the same time;
 #                  more than that on one account means it is being farmed, not read.
+# IPv6 clients are keyed by their /64 (see client_key), since one host can rotate through a /64.
 MINUTE, HOUR = 60, 60 * 60
 RULES: dict[str, list[tuple[int, float]]] = {  # bucket -> [(max hits, window seconds)]
-    "img": [(60, MINUTE), (600, HOUR)],
+    "img": [(120, MINUTE), (600, HOUR)],
     "thumb": [(400, 10 * MINUTE)],
-    "data": [(60, MINUTE), (600, HOUR)],
+    "data": [(120, MINUTE), (600, HOUR)],
     "img_account": [(3000, HOUR)],
+    "data_account": [(3000, HOUR)],
 }
 PRUNE_EVERY = 60.0  # seconds between sweeps that drop keys with no hit inside their longest window
+# A client hammering after its 429 isn't counted (see RateLimiter), so without this every refused
+# request would add a log line: log at most one "limited" line per (bucket, key) per this many seconds.
+NOTE_EVERY = 10.0
 TOO_FAST = "看得太快了，休息一下再继续"
 
 ACCESS_MAX_BYTES = 20 * 1024 * 1024  # rotate access.jsonl -> access.jsonl.1 past this size
 SUMMARY_DEFAULT_HOURS, SUMMARY_MAX_HOURS, SUMMARY_RECENT_LIMITED = 24, 168, 20
+
+
+def client_key(ip: str) -> str:
+    """The rate-limit key for a client address: IPv4 as is, IPv6 by its /64 network."""
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return ip
+    if addr.version == 6 and addr.ipv4_mapped is None:
+        return str(ipaddress.ip_network(f"{addr}/64", strict=False))
+    return str(getattr(addr, "ipv4_mapped", None) or addr)
 
 
 class RateLimiter:
@@ -57,17 +75,19 @@ class RateLimiter:
         self.rules = rules if rules is not None else {k: list(v) for k, v in RULES.items()}
         self.clock = clock
         self._hits: dict[tuple[str, tuple], deque[float]] = {}
+        self._noted: dict[tuple[str, tuple], float] = {}  # (bucket, key) -> last logged refusal
         self._lock = threading.Lock()
         self._last_prune = clock()
 
-    def hit(self, checks: list[tuple[str, tuple]]) -> tuple[str, int] | None:
+    def hit(self, checks: list[tuple[str, tuple]]) -> tuple[str, int, bool] | None:
         """Count one request against every (bucket, key) in `checks`, all or nothing.
-        Returns None when allowed, else (first bucket over its limit, Retry-After seconds)."""
+        Returns None when allowed, else (first bucket over its limit, Retry-After seconds, whether
+        this refusal should be logged - see NOTE_EVERY)."""
         with self._lock:
             now = self.clock()
             if now - self._last_prune >= PRUNE_EVERY:
                 self._prune(now)
-            over, wait = None, 0.0
+            over, over_key, wait = None, None, 0.0
             for bucket, key in checks:
                 q = self._hits.get((bucket, key))
                 if not q:
@@ -81,10 +101,15 @@ class RateLimiter:
                     if n >= limit:
                         # wait until enough old hits leave the window to get back under the limit
                         oldest = q[len(q) - limit]  # the hit whose expiry brings n below limit
-                        over = over or bucket
+                        if over is None:
+                            over, over_key = bucket, key
                         wait = max(wait, oldest + window - now)
             if over:
-                return over, max(1, math.ceil(wait))
+                last = self._noted.get((over, over_key))
+                note = last is None or now - last >= NOTE_EVERY
+                if note:
+                    self._noted[(over, over_key)] = now
+                return over, max(1, math.ceil(wait)), note
             for bucket, key in checks:
                 q = self._hits.setdefault((bucket, key), deque())
                 q.append(now)
@@ -97,6 +122,8 @@ class RateLimiter:
         for k in [k for k, q in self._hits.items()
                   if not q or now - q[-1] >= max(w for _, w in self.rules[k[0]])]:
             del self._hits[k]
+        for k in [k for k, t in self._noted.items() if now - t >= NOTE_EVERY]:
+            del self._noted[k]
         self._last_prune = now
 
     def __len__(self):
@@ -131,26 +158,29 @@ class JsonlFile:
                         line = "\n" + line
                 f.write(line.encode("utf-8"))
 
-    def entries(self, include_old: bool = False) -> list[dict]:
-        """All readable entries, oldest first; truncated or hand-edited lines are skipped."""
+    def entries(self, include_old: bool = False, newest: int | None = None) -> list[dict]:
+        """Readable entries, newest first (at most `newest` of them); truncated or hand-edited
+        lines are skipped. Reads without the lock so a big read never stalls appends: a line
+        being written at that moment is incomplete and simply skipped."""
         texts = []
-        with self.lock:
-            for p in ([self.old] if include_old else []) + [self.path]:
-                try:
-                    texts.append(p.read_text(encoding="utf-8"))
-                except FileNotFoundError:
-                    pass
+        for p in [self.path] + ([self.old] if include_old else []):
+            try:
+                texts.append(p.read_text(encoding="utf-8"))
+            except FileNotFoundError:
+                pass
         out = []
         for text in texts:
             # split on \n only: splitlines() would also break on U+2028 / U+0085 inside a text,
             # which json.dumps(ensure_ascii=False) leaves unescaped
-            for line in text.split("\n"):
+            for line in reversed(text.split("\n")):
                 try:
                     entry = json.loads(line)
                 except ValueError:
                     continue
                 if isinstance(entry, dict):
                     out.append(entry)
+                    if newest is not None and len(out) >= newest:
+                        return out
         return out
 
 
@@ -175,12 +205,12 @@ def summarize(entries: list[dict], hours: int, now: datetime | None = None) -> d
             continue
         u = users.setdefault(user, {"views": 0, "distinct_pages": 0, "ips": 0, "last_seen": None,
                                     "limited": 0})
-        ips.setdefault(user, set()).add(e.get("ip"))
+        ips.setdefault(user, set()).add(str(e.get("ip")))  # str(): a hand-edited list mustn't 500
         if u["last_seen"] is None or t > datetime.fromisoformat(u["last_seen"]):
             u["last_seen"] = e["time"]
         if event == "view":
             u["views"] += 1
-            pages.setdefault(user, set()).add((e.get("mag_id"), e.get("page")))
+            pages.setdefault(user, set()).add((str(e.get("mag_id")), str(e.get("page"))))
         elif event.startswith("limited:"):
             u["limited"] += 1
             limited.append((t, e))

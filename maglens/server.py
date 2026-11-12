@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 import threading
 import time
 from pathlib import Path
@@ -135,8 +136,11 @@ def create_app(cfg: Config, engine=None) -> FastAPI:
         return request.client.host if request.client else "?"
 
     def log_access(request: Request, mag_id: str, n: int, event: str):
-        access_log.append({"time": guard.utc_now(), "user": request.state.user["name"], "ip": client_ip(request),
-                           "mag_id": mag_id, "page": n, "event": event})
+        try:  # best effort: a full disk must not stop people reading
+            access_log.append({"time": guard.utc_now(), "user": request.state.user["name"],
+                               "ip": client_ip(request), "mag_id": mag_id, "page": n, "event": event})
+        except OSError as e:
+            print(f"access log write failed: {e}", file=sys.stderr)
 
     def throttle(request: Request, mag_id: str, n: int, bucket: str):
         """Count a reader request against its bucket (per account + IP; large images also per
@@ -144,12 +148,13 @@ def create_app(cfg: Config, engine=None) -> FastAPI:
         if is_admin(request):
             return
         name = request.state.user["name"]
-        checks = [(bucket, (name, client_ip(request)))]
-        if bucket == "img":
-            checks.append(("img_account", (name,)))
+        checks = [(bucket, (name, guard.client_key(client_ip(request))))]
+        if bucket in ("img", "data"):
+            checks.append((bucket + "_account", (name,)))
         over = app.state.limiter.hit(checks)
         if over:
-            log_access(request, mag_id, n, "limited:" + over[0])
+            if over[2]:
+                log_access(request, mag_id, n, "limited:" + over[0])
             raise HTTPException(429, guard.TOO_FAST, headers={"Retry-After": str(over[1])})
 
     def can_see(request: Request, mag_id: str) -> bool:
@@ -464,7 +469,7 @@ def create_app(cfg: Config, engine=None) -> FastAPI:
     @app.get("/api/feedback")
     def feedback_list(limit: int = FEEDBACK_LIST_DEFAULT):
         limit = max(1, min(limit, FEEDBACK_LIST_MAX))
-        return {"feedback": feedback_file.entries()[::-1][:limit]}  # appended in time order -> newest first
+        return {"feedback": feedback_file.entries(newest=limit)}
 
     # ------------------------------------------------------------------ access log (admin only)
     # <data_dir>/access.jsonl: one line per reader page view and per 429. Server-only, like feedback.

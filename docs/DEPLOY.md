@@ -60,7 +60,7 @@ ssh -t admin@服务器IP 'sudo -u maglens env -C /opt/maglens/app .venv/bin/pyth
 - 管理员：服务器上没有模型，所以「重译」「框选识别」在线上会自动隐藏。
 - 账号保存在 `data/auth.json`，同步时不会被覆盖。改密码用 `passwd`，删账号用 `remove`，列出账号用 `list`。
 - 登录有防暴力破解：同一个 IP 15 分钟内输错 10 次会被暂时锁住。
-- 防整本抓取：读者（管理员不受限）按「账号 + IP」限速——大图和译文各每分钟 60 次、每小时 600 次，缩略图每 10 分钟 400 次；同一账号所有 IP 加起来大图每小时最多 3000 次（防止公开试读账号被很多 IP 一起刷）。超过返回 429「看得太快了，休息一下再继续」，带 `Retry-After`。正常翻页（包括快速翻阅和预加载）碰不到；数字和理由在 `maglens/guard.py` 顶部。计数在内存里，重启服务后清零。
+- 防整本抓取：读者（管理员不受限）按「账号 + IP」限速——大图和译文各每分钟 120 次、每小时 600 次，缩略图每 10 分钟 400 次；同一账号所有 IP 加起来，大图和译文各每小时最多 3000 次（防止公开试读账号被很多 IP 一起刷）。IPv6 按 /64 网段算一个来源。超过返回 429「看得太快了，休息一下再继续」，带 `Retry-After`。正常翻页（包括快速翻阅和预加载）碰不到；数字和理由在 `maglens/guard.py` 顶部。计数在内存里，重启服务后清零。
 
 ## 3. 同步内容（在自己电脑上，以后每次新翻了杂志或改了代码）
 ```bash
@@ -77,7 +77,7 @@ deploy/sync.sh ubuntu@你的服务器IP 2026.12       # 只导出新的一期（
   ```bash
   ssh admin@<服务器IP> 'sudo cat /opt/maglens/data/feedback.jsonl' > feedback.jsonl
   ```
-- 查看访问记录：读者每看一页译文（`GET /api/mag/{id}/page/{n}`，不含图片，不记管理员）和每次被限速，都会在服务器的 `data/access.jsonl` 追加一行 JSON：`{"time": UTC 时间, "user", "ip", "mag_id", "page", "event": "view" 或 "limited:<类别>"}`，类别是 `img` / `thumb` / `data` / `img_account`。超过约 20MB 时改名为 `access.jsonl.1`（只留一个旧文件）。和 `feedback.jsonl` 一样只在服务器上，`sync.sh` 不会上传或覆盖。管理员可以用 `GET /api/access/summary?hours=24`（最多 168）看每个账号的浏览数、不同页数、IP 数、最后访问时间、被限速次数，以及最近 20 次限速。拿到本机：
+- 查看访问记录：读者每看一页译文（`GET /api/mag/{id}/page/{n}`，不含图片，不记管理员）和被限速（被拒后还在连续请求的，同一类别每 10 秒只记一行，免得刷满日志），都会在服务器的 `data/access.jsonl` 追加一行 JSON：`{"time": UTC 时间, "user", "ip", "mag_id", "page", "event": "view" 或 "limited:<类别>"}`，类别是 `img` / `thumb` / `data` / `img_account` / `data_account`。超过约 20MB 时改名为 `access.jsonl.1`（只留一个旧文件）。和 `feedback.jsonl` 一样只在服务器上，`sync.sh` 不会上传或覆盖。管理员可以用 `GET /api/access/summary?hours=24`（最多 168）看每个账号的浏览数、不同页数、IP 数、最后访问时间、被限速次数，以及最近 20 次限速。拿到本机：
   ```bash
   ssh admin@<服务器IP> 'sudo cat /opt/maglens/data/access.jsonl' > access.jsonl
   ```
