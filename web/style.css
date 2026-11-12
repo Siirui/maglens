@@ -112,10 +112,10 @@ button.primary { background: var(--accent); border-color: var(--accent); color: 
 .pg { position: relative; flex: none; box-shadow: 0 4px 30px rgba(0,0,0,.5); background: #fff; }
 .pg img { height: 100%; width: 100%; display: block; user-select: none; -webkit-user-drag: none; }
 .ov { position: absolute; inset: 0; }
-/* per-account watermark (app.js setWatermark): two tiles across the page, so it scales with the page */
-.pg .wm { display: none; position: absolute; inset: 0; pointer-events: none; user-select: none; -webkit-user-select: none;
-  background-image: var(--wm); background-size: 50% auto; background-repeat: repeat; background-position: 0 0; opacity: .07; }
-html.has-wm .pg .wm { display: block; }
+/* per-account watermark (app.js setWatermark): two tiles across the page, so it scales with the page.
+   ::before paints above the image but below .ov, so box highlights stay on top. */
+html.has-wm .pg::before { content: ""; position: absolute; inset: 0; pointer-events: none;
+  background-image: var(--wm); background-size: 50% auto; background-repeat: repeat; opacity: .07; }
 .bx { position: absolute; border: 1.5px solid transparent; border-radius: 2px; cursor: pointer; transition: background .12s; }
 .showboxes .bx { border-color: rgba(210, 69, 45, .55); }
 .bx:hover { background: var(--accent-soft); }
