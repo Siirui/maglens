@@ -143,7 +143,7 @@ def create_app(cfg: Config, engine=None) -> FastAPI:
             print(f"access log write failed: {e}", file=sys.stderr)
 
     def throttle(request: Request, mag_id: str, n: int, bucket: str):
-        """Count a reader request against its bucket (per account + IP; large images also per
+        """Count a reader request against its bucket (per account + IP; large images and page data also per
         account). Runs before the issue lookup, so probing hidden issues counts too."""
         if is_admin(request):
             return
