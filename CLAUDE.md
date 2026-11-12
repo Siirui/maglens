@@ -39,7 +39,7 @@ python run.py --manual                     # 本机只读预览 → http://127.0
 python run.py --mock --dir <测试目录>       # 只用 PDF 文字层调界面
 python tests/make_sample.py x.pdf          # 生成 3 页测试杂志
 python -m maglens.publish --out ~/.maglens/dist
-deploy/sync.sh admin@<服务器IP>        # 同步代码和数据到线上
+deploy/sync.sh admin@<服务器IP>        # 同步代码和数据到线上 （真实地址见 docs/PRIVATE.md）
 ```
 
 ## 写代码的规矩
