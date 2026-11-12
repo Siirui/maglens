@@ -375,3 +375,15 @@ html.sheet-ui #bar.reading #user button { padding: 2px 6px; }
   font-size: 13px; background: var(--paper); border: 2px solid var(--hard); border-radius: 12px; box-shadow: 3px 3px 0 var(--hard); }
 #a2hs span { flex: 1; }
 #a2hs button { flex: none; border: 0; padding: 2px 8px; font-size: 18px; line-height: 1; color: var(--ink2); }
+
+/* phones: swipe to turn pages (app.js). Horizontal drags are ours, vertical scrolling and pinch-zoom stay native;
+   overscroll-behavior-x stops Android Chromium (Edge, Chrome) from turning a sideways swipe into history back/forward. */
+html.sheet-ui, html.sheet-ui body { overscroll-behavior-x: none; }
+html.sheet-ui #stage, html.sheet-ui #panel { touch-action: manipulation; touch-action: pan-y pinch-zoom; overscroll-behavior-x: none; }
+html.sheet-ui.vv-zoomed #stage, html.sheet-ui.vv-zoomed #panel, html.sheet-ui #stage.pannable { touch-action: manipulation; }
+#swipe-hint { position: absolute; left: 50%; bottom: calc(var(--peek, 64px) + 18px); transform: translateX(-50%); z-index: 3;
+  padding: 6px 14px; border-radius: 999px; background: rgba(0, 0, 0, .62); color: #fff; font-size: 13px; font-weight: 600;
+  letter-spacing: .04em; white-space: nowrap; pointer-events: none; animation: swipe-hint-in .3s ease-out; transition: opacity .35s; }
+#swipe-hint.out { opacity: 0; }
+@keyframes swipe-hint-in { from { opacity: 0; transform: translate(-50%, 6px); } }
+@media (prefers-reduced-motion: reduce) { #swipe-hint { animation: none; transition: none; } }

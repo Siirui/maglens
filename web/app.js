@@ -278,11 +278,12 @@ $("#stage").addEventListener("wheel", e => {
   setZoom(S.zoom * Math.exp(-e.deltaY * (e.deltaMode ? 0.08 : 0.0025)), { x: e.clientX, y: e.clientY });
 }, { passive: false });
 // swipe left/right to turn pages (touch), unless zoomed in far enough to pan
+const pinched = () => (window.visualViewport?.scale || 1) > 1.01;  // panning a pinch-zoomed page
 {
+  // desktop / landscape: the original quick-swipe on the page area
   let t0 = null;
   $("#stage").addEventListener("touchstart", e => {
-    const pinched = (window.visualViewport?.scale || 1) > 1.01;  // panning a pinch-zoomed page
-    t0 = e.touches.length === 1 && !pinched && !$("#stage").classList.contains("pannable") && !S.selecting
+    t0 = !sheetOn() && e.touches.length === 1 && !pinched() && !$("#stage").classList.contains("pannable") && !S.selecting
       ? { x: e.touches[0].clientX, y: e.touches[0].clientY, t: Date.now() } : null;
   }, { passive: true });
   $("#stage").addEventListener("touchend", e => {
@@ -292,6 +293,124 @@ $("#stage").addEventListener("wheel", e => {
       go(dx > 0 ? (S.rtl ? 1 : -1) : (S.rtl ? -1 : 1));   // same as ←/→
     t0 = null;
   }, { passive: true });
+}
+// Phones (sheet UI): drag the page like a sheet of paper, on the page area and on the translation sheet.
+// CSS gives both areas `touch-action: pan-y pinch-zoom`, so vertical scrolling and pinch-zoom stay native
+// and every listener here can be passive. Direction is locked in the first few pixels; a drag turns the
+// page past 22% of the width, or on a quick flick, and otherwise springs back.
+{
+  const LOCK = 10, COMMIT = 0.22, FLICK = 0.35, LONGPRESS = 500;  // px, × stage width, px/ms, ms
+  const pages = $("#pages"), panel = $("#panel"), stage = $("#stage");
+  const still = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const deltaOf = dx => dx > 0 ? (S.rtl ? 1 : -1) : (S.rtl ? -1 : 1);  // same as ←/→ and the ‹ › buttons
+  const canGo = d => { const v = visiblePages(); return d > 0 ? posOf(v[v.length - 1]) < S.order.length - 1 : posOf(v[0]) > 0; };
+  // flags kept on <html> so CSS can hand gestures back to the browser when the page is pinch-zoomed
+  const syncZoom = () => document.documentElement.classList.toggle("vv-zoomed", pinched());
+  window.visualViewport?.addEventListener("resize", syncZoom);
+  let g = null, busy = false;
+  const move = (x, ms) => {
+    for (const el of [pages, panel]) {
+      el.style.transition = ms ? `transform ${ms}ms cubic-bezier(.2, .8, .2, 1)` : "none";
+      el.style.transform = x ? `translateX(${x}px)` : "";
+    }
+  };
+  const settle = (x, ms) => new Promise(res => { move(x, ms); setTimeout(res, ms); });
+  const reset = () => { for (const el of [pages, panel]) { el.style.transition = ""; el.style.transform = ""; el.style.opacity = ""; } };
+  // a horizontally scrollable box (wide table, textarea) keeps its own swipes
+  const scrollsX = (el, root) => {
+    for (; el && el !== root; el = el.parentElement)
+      if (el.scrollWidth > el.clientWidth + 1 && /auto|scroll/.test(getComputedStyle(el).overflowX)) return true;
+    return false;
+  };
+  function start(e) {
+    if (g && e.touches.length > 1) return cancel();  // a second finger joined: a pinch, not a swipe
+    g = null;
+    if (busy || !sheetOn() || e.touches.length !== 1 || pinched() || S.selecting || stage.classList.contains("pannable")) return;
+    if (e.target.closest("input, textarea, select, button, a, label, [contenteditable], #grab, #bubble")) return;
+    if (!getSelection().isCollapsed || scrollsX(e.target, e.currentTarget)) return;  // adjusting a text selection
+    const t = e.touches[0];
+    g = { x: t.clientX, y: t.clientY, t: e.timeStamp, lock: null, dx: 0, w: stage.clientWidth, v: [[e.timeStamp, t.clientX]] };
+  }
+  function drag(e) {
+    if (!g) return;
+    if (e.touches.length !== 1) return cancel();  // a second finger: this is a pinch
+    const t = e.touches[0], dx = t.clientX - g.x, dy = t.clientY - g.y;
+    if (!g.lock) {
+      if (Math.hypot(dx, dy) < LOCK) return;
+      // a long press before moving starts text selection, not a page turn
+      g.lock = Math.abs(dx) > Math.abs(dy) && e.timeStamp - g.t < LONGPRESS ? "x" : "y";
+      if (g.lock === "x") hideHint();
+    }
+    if (g.lock !== "x") return;
+    if (!getSelection().isCollapsed) return cancel();
+    g.dx = t.clientX - g.x;
+    g.v.push([e.timeStamp, t.clientX]);
+    while (g.v.length > 2 && e.timeStamp - g.v[0][0] > 100) g.v.shift();
+    // nothing to turn to: rubber-band resistance
+    const x = canGo(deltaOf(g.dx)) ? g.dx : g.dx / (1 + Math.abs(g.dx) / (g.w * 0.25)) * 0.5;
+    if (!still()) move(x, 0);
+  }
+  async function end() {
+    if (!g || g.lock !== "x") { g = null; return; }
+    const { dx, w, v } = g; g = null;
+    const [t0, x0] = v[0], [t1, x1] = v[v.length - 1];
+    const vel = t1 > t0 ? (x1 - x0) / (t1 - t0) : 0;  // px/ms over the last ~100ms
+    const d = deltaOf(dx);
+    const flick = Math.abs(vel) > FLICK && Math.abs(dx) > 24 && Math.sign(vel) === Math.sign(dx);
+    const back = Math.sign(vel) === -Math.sign(dx) && Math.abs(vel) > 0.3;  // pulled back before letting go
+    if (!canGo(d) || back || !(Math.abs(dx) > COMMIT * w || flick)) {
+      if (!still()) { busy = true; await settle(0, 220); busy = false; }
+      return reset();
+    }
+    if (still()) { reset(); return go(d); }
+    busy = true;
+    const dir = Math.sign(dx);
+    await settle(dir * w, 160);
+    // Clear the transform before render() runs: a page shifted sideways widens the stage's scrollable area,
+    // and fitPages() would then mark the stage .pannable. Hide it instead until the next page is in place.
+    reset();
+    for (const el of [pages, panel]) el.style.opacity = "0";
+    // the next page slides in from the other side once render() has swapped the content
+    const enter = () => {
+      move(-dir * w, 0);
+      for (const el of [pages, panel]) el.style.opacity = "";
+      requestAnimationFrame(() => requestAnimationFrame(async () => { await settle(0, 220); reset(); busy = false; }));
+    };
+    const timer = setTimeout(() => { removeEventListener("hashchange", onHash); reset(); busy = false; }, 1000);
+    const onHash = () => { clearTimeout(timer); setTimeout(enter, 0); };  // after route() has rendered
+    addEventListener("hashchange", onHash, { once: true });
+    go(d);
+  }
+  function cancel() {  // the browser took over (touchcancel) or a pinch started: spring back
+    if (!g) return;
+    const was = g.lock === "x"; g = null;
+    if (was && !still()) { busy = true; settle(0, 220).then(() => { reset(); busy = false; }); } else if (was) reset();
+  }
+  for (const el of [stage, panel]) {
+    el.addEventListener("touchstart", start, { passive: true });
+    el.addEventListener("touchmove", drag, { passive: true });
+    el.addEventListener("touchend", end, { passive: true });
+    el.addEventListener("touchcancel", cancel, { passive: true });
+  }
+  // one-time hint for first-time phone readers
+  let hint = null;
+  function hideHint() {
+    if (!hint) return;
+    const h = hint; hint = null;
+    h.classList.add("out"); setTimeout(() => h.remove(), 400);
+  }
+  function maybeHint() {
+    if (hint || $("#reader").hidden || !sheetOn() || store.get("swipeHint", false)) return;
+    store.set("swipeHint", true);
+    hint = document.createElement("div");
+    hint.id = "swipe-hint"; hint.setAttribute("aria-hidden", "true");
+    hint.textContent = "← 左右滑动翻页 →";
+    $("#left").appendChild(hint);
+    setTimeout(hideHint, 3000);
+  }
+  new MutationObserver(maybeHint).observe($("#reader"), { attributes: true, attributeFilter: ["hidden"] });
+  SHEET.mq.addEventListener("change", maybeHint);
+  maybeHint(); syncZoom();
 }
 // drag to pan when the page is larger than the stage (not while box-selecting)
 $("#stage").addEventListener("mousedown", e => {
