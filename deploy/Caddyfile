@@ -5,6 +5,13 @@ mag.example.com {
 	header {
 		X-Robots-Tag "noindex, nofollow"
 		Referrer-Policy "same-origin"
+		# 只走 HTTPS（一年）；没加 includeSubDomains，免得影响同域名下的其他服务
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		# 不允许别的网站用 iframe 嵌入（防点击劫持）；脚本只能来自本站，不允许内联脚本
+		Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+		Cross-Origin-Opener-Policy "same-origin"
 		-Server
 	}
 }

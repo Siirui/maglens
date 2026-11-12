@@ -27,7 +27,7 @@ from .prompts import PROMPT_VERSION
 from .store import Store, available
 
 LOCAL_ADMIN = {"name": "本机", "role": "admin"}
-PUBLIC = {"/login.html", "/style.css", "/robots.txt", "/api/login", "/api/me", "/favicon.ico", "/favicon.svg"}
+PUBLIC = {"/login.html", "/login.js", "/style.css", "/robots.txt", "/api/login", "/api/me", "/favicon.ico", "/favicon.svg"}
 ADMIN_ONLY = [  # (method, path regex)
     ("POST", r"/api/library/rescan"),
     ("POST", r"/api/mag/[^/]+/page/\d+/retranslate"),
