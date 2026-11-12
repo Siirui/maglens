@@ -107,10 +107,16 @@ class Auth:
 
     def _load(self):
         """Parse and validate first, then swap everything in at once."""
-        if not self.path.exists():
+        try:
+            text = self.path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            if self.users:  # never let a vanished file switch login off
+                raise
+            text = None
+        if text is None:
             secret, users = b"", {}
         else:
-            raw = json.loads(self.path.read_text(encoding="utf-8"))
+            raw = json.loads(text)
             secret = bytes.fromhex(raw["secret"])
             users = {u["name"]: u for u in raw.get("users", [])}
             for u in users.values():
