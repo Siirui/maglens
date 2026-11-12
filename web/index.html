@@ -2,7 +2,8 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#fffdf8">
 <meta name="robots" content="noindex, nofollow">
 <title>MagLens</title>
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
@@ -24,6 +25,7 @@
     <div class="seg" id="mode">
       <button data-mode="zh">中文</button><button data-mode="bi">对照</button><button data-mode="ja">原文</button>
     </div>
+    <button id="btn-tap" class="phone-only" title="点页面上的文字，就地弹出译文">点读</button>
     <button id="btn-spread" title="单页 / 跨页 (S)">跨页</button>
     <button id="btn-dir" title="装订方向">右翻</button>
     <button id="btn-boxes" class="admin-only" title="在页面上显示所有文本框 (B)">显示框</button>
@@ -69,7 +71,17 @@
     <div id="thumbs"></div>
   </section>
   <div id="divider"></div>
-  <section id="right"><div id="panel"></div></section>
+  <section id="right">
+    <div id="grab" role="button" tabindex="0" aria-label="拖动或点按，调整译文面板的高度">
+      <div class="peek">
+        <button id="sh-prev" aria-label="向左翻页">‹</button>
+        <span id="peek-text">译文</span>
+        <span id="peek-page"></span>
+        <button id="sh-next" aria-label="向右翻页">›</button>
+      </div>
+    </div>
+    <div id="panel"></div>
+  </section>
 </main>
 
 <dialog id="gloss">
@@ -105,6 +117,14 @@
       <span class="grow"></span>
       <button value="cancel">关闭</button>
     </div>
+  </form>
+</dialog>
+<dialog id="fbdlg">
+  <form method="dialog">
+    <h2>读者反馈</h2>
+    <p class="hint">读者在阅读页底部提交的意见，最新的在最上面。点标题可以跳到那一页。</p>
+    <div id="fb-table"></div>
+    <div class="row"><span class="grow"></span><button value="cancel">关闭</button></div>
   </form>
 </dialog>
 <script src="app.js"></script>

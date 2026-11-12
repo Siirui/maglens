@@ -22,6 +22,9 @@
 html { --top: 48px; }
 html.has-progress { --top: 80px; }
 html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink); font-family: var(--font); }
+/* iOS Safari: 100% follows the toolbar-collapsed height, so the bottom sheet would sit under the toolbar */
+@supports (height: 100dvh) { html, body { height: 100dvh; } }
+body { overscroll-behavior: none; }
 button, input, a.btn { font: inherit; color: inherit; }
 #btn-export { color: var(--ink); }
 button, #btn-export {
@@ -202,7 +205,7 @@ dialog small { color: var(--ink3); font-weight: 400; }
 }
 .grow { flex: 1; }
 
-@media (max-width: 860px) {
+@media (max-width: 860px) and (orientation: portrait) {
   #reader { flex-direction: column; }
   #left { flex: none; height: 55%; }
   #divider { display: none; }
@@ -271,3 +274,67 @@ dialog small { color: var(--ink3); font-weight: 400; }
 .role-reader .blk .tag { display: none; }
 .role-reader .phead .kind { display: none; }
 .no-model .needs-model { display: none !important; }
+
+/* ------------------------------------------------------------------ feedback (end of the panel) */
+.fb { margin-top: 28px; padding-top: 14px; border-top: 1px dashed var(--line); font-size: 13px; color: var(--ink2); }
+.fb .fb-open { border: 0; padding: 0; color: var(--ink2); text-decoration: underline; text-underline-offset: 3px; }
+.fb textarea { width: 100%; min-height: 84px; margin: 8px 0; padding: 8px 10px; font: inherit; font-size: 14px; color: var(--ink);
+  background: var(--bg); border: 1.5px solid var(--line); border-radius: 8px; resize: vertical; }
+.fb .fb-row { display: flex; gap: 8px; align-items: center; }
+.fb .fb-row .grow { flex: 1; }
+.fb .fb-msg.err { color: var(--accent); }
+#fbdlg { width: min(720px, 92vw); }
+#fb-table { max-height: 60vh; overflow: auto; border: 1px solid var(--line); border-radius: 6px; }
+.fbr { padding: 10px 12px; border-bottom: 1px solid var(--line); display: grid; gap: 4px; }
+.fbr:last-child { border-bottom: 0; }
+.fbr .fbh { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 12px; color: var(--ink3); }
+.fbr .fbh a { color: var(--ink); font-weight: 600; }
+.fbr .fbt { font-size: 14px; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* ------------------------------------------------------------------ phones: page fills the screen, translation in a sheet
+   html.sheet-ui is set by app.js (portrait phones / narrow portrait tablets). Landscape keeps the side-by-side layout. */
+.phone-only, #grab { display: none; }
+html.sheet-ui .phone-only { display: inline-block; }
+html.sheet-ui #reader { position: relative; flex-direction: column; overflow: hidden; }
+html.sheet-ui #left { flex: 1 1 auto !important; height: auto; min-height: 0; position: relative; }
+html.sheet-ui #divider, html.sheet-ui #pager, html.sheet-ui #thumbs { display: none; }
+html.sheet-ui #stage { padding: 8px 8px calc(var(--peek, 64px) + 8px); touch-action: manipulation; }
+html.sheet-ui #right { position: absolute; left: 0; right: 0; bottom: 0; z-index: 4; height: var(--peek, 64px); min-width: 0; min-height: 0;
+  flex: none !important; display: flex; flex-direction: column; overflow: hidden; border-radius: 18px 18px 0 0;
+  box-shadow: 0 -6px 24px rgba(0, 0, 0, .35); padding-bottom: env(safe-area-inset-bottom, 0px);
+  transition: height .28s cubic-bezier(.2, .8, .2, 1); }
+html.sheet-ui #right.dragging { transition: none; }
+html.sheet-ui #grab { display: block; flex: none; padding: 8px 12px 10px; cursor: grab; touch-action: none;
+  user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+#grab::before { content: ""; display: block; width: 38px; height: 5px; border-radius: 3px; background: var(--ink3); margin: 0 auto 8px; }
+#grab .peek { display: flex; align-items: center; gap: 10px; font-size: 13px; }
+#peek-text { flex: 1; min-width: 0; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#peek-page { font-variant-numeric: tabular-nums; color: var(--ink2); font-size: 12px; white-space: nowrap; }
+#grab .peek button { width: 36px; height: 32px; padding: 0; font-size: 20px; line-height: 1; font-weight: 700; color: var(--ink);
+  background: var(--paper); border: 2px solid var(--hard); border-radius: 9px; box-shadow: 2px 2px 0 var(--hard); touch-action: manipulation; }
+#grab .peek button:active { transform: translate(1px, 1px); box-shadow: 1px 1px 0 var(--hard); }
+html.sheet-ui #panel { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch;
+  max-width: none; padding: 0 18px 40px; }
+html.sheet-ui .phead { margin-top: 0; }
+@media (prefers-reduced-motion: reduce) { html.sheet-ui #right { transition: none; } }
+
+/* tap mode: a bubble with the passage's translation, right on the page */
+#bubble { position: absolute; left: 10px; right: 10px; z-index: 5; max-height: 45%; overflow: auto; padding: 10px 14px 12px;
+  background: var(--paper); color: var(--ink); border: 2px solid var(--hard); border-radius: 14px; box-shadow: 4px 4px 0 var(--hard); }
+#bubble .bt { display: flex; align-items: center; gap: 8px; font-size: 11px; font-weight: 700; color: var(--ink3); letter-spacing: .06em; }
+#bubble .bt .grow { flex: 1; }
+#bubble .x { border: 0; padding: 2px 4px; font-size: 16px; color: var(--ink2); }
+#bubble .zh { font-size: 15.5px; line-height: 1.8; margin-top: 2px; }
+#bubble .ja { font-family: var(--ja); font-size: 13px; line-height: 1.7; color: var(--ink2); margin-top: 6px; padding-top: 6px; border-top: 1px dashed var(--line); }
+#bubble .note { font-size: 12.5px; color: var(--ink2); margin-top: 6px; }
+#bubble .note::before { content: "译注 · "; color: var(--accent); }
+#bubble .more { margin-top: 6px; font-size: 11.5px; color: var(--ink3); }
+
+/* landscape phones: side by side, but the strip of thumbnails and fit/zoom controls would eat half the height */
+@media (max-height: 500px) and (orientation: landscape) {
+  #thumbs, #pager #fit, #pager .zoom { display: none; }
+  #pager { padding: 2px 8px; }
+  #stage { padding: 6px; }
+  #right { min-width: 0; }
+  #panel { padding: 12px 18px 48px; }
+}

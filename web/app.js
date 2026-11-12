@@ -13,10 +13,11 @@ function setUser(user, auth, model = ME.model) {
   document.documentElement.classList.toggle("role-reader", !isAdmin());
   document.documentElement.classList.toggle("no-model", !ME.model);
   $("#user").innerHTML = auth && user
-    ? `<span class="uname">${esc(user.name)}</span>` + (isAdmin() ? `<button id="btn-users" title="新建、删除账号，重置密码">账号</button>` : "")
+    ? `<span class="uname">${esc(user.name)}</span>` + (isAdmin() ? `<button id="btn-fb" title="读者提交的反馈">反馈</button><button id="btn-users" title="新建、删除账号，重置密码">账号</button>` : "")
       + `<button id="logout" title="退出登录">退出</button>` : "";
   if ($("#logout")) $("#logout").onclick = async () => { await fetch("/api/logout", { method: "POST" }); location.href = "/login.html"; };
   if ($("#btn-users")) $("#btn-users").onclick = openUsers;
+  if ($("#btn-fb")) $("#btn-fb").onclick = openFeedback;
 }
 const esc = s => (s || "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const store = {
@@ -33,7 +34,13 @@ const S = {
   mag: null, page: 0, mode: store.get("mode", "bi"), spread: store.get("spread", false),
   rtl: store.get("rtl", true), boxes: false, selecting: false, data: {}, polls: {},
   fit: store.get("fit", "page"), zoom: store.get("zoom", 1),
+  tap: store.get("tap", "sheet"),  // phones: "sheet" (tap a passage -> the sheet scrolls to it) or "bubble"
 };
+// Phones (portrait): the page fills the screen and the translation lives in a bottom sheet with three
+// heights: 0 = just a strip with the page title, 1 = half the screen, 2 = almost all of it.
+const SHEET = { mq: matchMedia("(max-width: 600px), (max-width: 860px) and (orientation: portrait)"),
+  lvl: store.get("sheet", 0) };
+const sheetOn = () => SHEET.mq.matches;
 
 // ---------------------------------------------------------------- routing
 window.addEventListener("hashchange", route);
@@ -121,7 +128,7 @@ async function openReader(id, page) {
 const ZOOM_MIN = 0.25, ZOOM_MAX = 5;
 function basePageHeight(w, h, n) {
   const ar = S.mag.aspect * n;                      // width / height of everything shown
-  switch (S.fit) {
+  switch (sheetOn() ? "page" : S.fit) {             // phones: always the whole page (no fit buttons there)
     case "width": return w / ar;
     case "height": return h;
     case "fill": return Math.max(h, w / ar);
@@ -137,8 +144,10 @@ function fitPages(anchor) {
   const oldW = st.scrollWidth, oldH = st.scrollHeight;
   const fx = (st.scrollLeft + ax) / (oldW || 1), fy = (st.scrollTop + ay) / (oldH || 1);
 
-  const w = st.clientWidth - 32, h = st.clientHeight - 32;
-  const ph = Math.max(80, Math.floor(basePageHeight(w, h, pgs.length) * S.zoom));
+  const cs = getComputedStyle(st);
+  const w = st.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+  const h = st.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
+  const ph = Math.max(80, Math.floor(basePageHeight(w, h, pgs.length) * (sheetOn() ? 1 : S.zoom)));
   const pw = Math.floor(ph * S.mag.aspect);
   const want = pw * (window.devicePixelRatio || 1) > 1700 ? 2400 : 1600;
   S.imgW = want;  // next render() and the prefetch use the same width -> one download per page
@@ -240,7 +249,10 @@ function prefetchAhead(vis) {
 
 function render() {
   const vis = visiblePages();
+  closeBubble();
   $("#pageinput").value = vis[0] + 1;
+  $("#peek-page").textContent = `${vis.map(n => n + 1).join("–")} / ${S.mag.pages}`;
+  $("#peek-text").textContent = "译文";
   syncToolButtons();
   // left: page images (RTL binding puts the lower page number on the right)
   const order = S.rtl ? [...vis].reverse() : vis;
@@ -260,7 +272,9 @@ function render() {
   });
   const cur = $("#thumbs img.cur"); if (cur) cur.scrollIntoView({ block: "nearest", inline: "center" });
   // right
-  $("#panel").innerHTML = vis.map(n => `<div class="psec" data-page="${n}"></div>`).join("");
+  $("#panel").innerHTML = vis.map(n => `<div class="psec" data-page="${n}"></div>`).join("") + feedbackForm(vis[0]);
+  $("#panel").scrollTop = 0;
+  bindFeedback();
   vis.forEach(loadPage);
 }
 
@@ -314,6 +328,7 @@ function drawPanel(n, r) {
   const hasText = d.blocks.some(b => b.type !== "meta" && b.zh && !trivial(b));
   sec.innerHTML = head(n, d, r) + (d.page_summary && (isAdmin() || !hasText) ? `<div class="summary">${esc(d.page_summary)}</div>` : "") +
     (blocks || `<div class="empty">这一页没有识别到文字</div>`);
+  if (n === visiblePages()[0]) $("#peek-text").textContent = peekTitle(d);
   sec.querySelectorAll(".blk").forEach(el => {
     el.onmouseenter = () => activate(n, el.dataset.id, false);
     el.onmouseleave = () => activate(n, null);
@@ -329,8 +344,9 @@ function drawBoxes(n) {
     return `<div class="bx" data-id="${b.id}" style="left:${x0 * 100}%;top:${y0 * 100}%;width:${(x1 - x0) * 100}%;height:${(y1 - y0) * 100}%"></div>`;
   }).join("");
   ov.querySelectorAll(".bx").forEach(el => {
-    el.onmouseenter = () => activate(n, el.dataset.id, true);
-    el.onmouseleave = () => activate(n, null);
+    el.onmouseenter = () => { if (!sheetOn()) activate(n, el.dataset.id, true); };
+    el.onmouseleave = () => { if (!sheetOn()) activate(n, null); };
+    el.onclick = e => { e.stopPropagation(); tapBox(n, el.dataset.id, el); };
   });
 }
 
@@ -340,7 +356,154 @@ function activate(n, id, scrollPanel) {
   const blk = $(`.blk[data-page="${n}"][data-id="${id}"]`);
   const bx = $(`.pg[data-page="${n}"] .bx[data-id="${id}"]`);
   blk?.classList.add("active"); bx?.classList.add("active");
-  if (scrollPanel && blk) blk.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  if (!scrollPanel || !blk) return;
+  if (!sheetOn()) return blk.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  const pn = $("#panel");  // scroll only the sheet; scrollIntoView could also shift the clipped #right
+  pn.scrollTo({ top: pn.scrollTop + blk.getBoundingClientRect().top - pn.getBoundingClientRect().top - 6, behavior: "smooth" });
+}
+
+// ---------------------------------------------------------------- phones: bottom sheet + tap mode
+function sheetLevels() {
+  const h = $("#reader").clientHeight, r = $("#right");
+  const peek = $("#grab").offsetHeight + parseFloat(getComputedStyle(r).paddingBottom || 0);
+  return [Math.round(peek), Math.round(h * 0.5), Math.round(h * 0.92)];
+}
+function setSheet(n, remember = true) {
+  SHEET.lvl = n;
+  if (remember) store.set("sheet", n);
+  if (!sheetOn() || $("#reader").hidden) return;
+  const L = sheetLevels();
+  $("#reader").style.setProperty("--peek", L[0] + "px");
+  $("#right").style.height = L[n] + "px";
+}
+function applyLayout() {
+  const on = sheetOn();
+  document.documentElement.classList.toggle("sheet-ui", on);
+  closeBubble();
+  if (on) { $("#left").style.flex = ""; $("#right").style.flex = ""; setSheet(SHEET.lvl, false); }
+  else { $("#right").style.height = ""; $("#reader").style.removeProperty("--peek"); }
+  fitPages();
+}
+SHEET.mq.addEventListener("change", applyLayout);
+new ResizeObserver(() => { if (sheetOn()) setSheet(SHEET.lvl, false); }).observe($("#reader"));
+applyLayout();
+// drag the handle to resize (snaps to the nearest height); a tap cycles 0 -> 1 -> 2 -> 0
+{
+  const grab = $("#grab"), right = $("#right");
+  let y0 = null, h0 = 0, moved = false;
+  grab.addEventListener("pointerdown", e => {
+    if (e.target.closest("button") || !sheetOn()) return;
+    y0 = e.clientY; h0 = right.offsetHeight; moved = false;
+    grab.setPointerCapture(e.pointerId); right.classList.add("dragging");
+  });
+  grab.addEventListener("pointermove", e => {
+    if (y0 === null) return;
+    const dy = y0 - e.clientY; if (Math.abs(dy) > 5) moved = true;
+    const L = sheetLevels(); right.style.height = Math.max(L[0], Math.min(L[2], h0 + dy)) + "px";
+  });
+  const end = () => {
+    if (y0 === null) return;
+    y0 = null; right.classList.remove("dragging");
+    if (!moved) return setSheet((SHEET.lvl + 1) % 3);
+    const h = right.offsetHeight, L = sheetLevels();
+    setSheet(L.reduce((b, v, i) => Math.abs(v - h) < Math.abs(L[b] - h) ? i : b, 0));
+  };
+  grab.addEventListener("pointerup", end); grab.addEventListener("pointercancel", end);
+  grab.addEventListener("keydown", e => { if (e.target === grab && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); setSheet((SHEET.lvl + 1) % 3); } });
+  // ‹ › follow the binding direction like the arrow keys: right-bound magazines read right to left
+  $("#sh-prev").onclick = () => go(S.rtl ? 1 : -1);
+  $("#sh-next").onclick = () => go(S.rtl ? -1 : 1);
+}
+// the strip shows the page's headline (or the first real passage) so the page has a name at a glance
+function peekTitle(d) {
+  const ok = d.blocks.filter(b => b.type !== "meta" && b.zh && !trivial(b));
+  const b = ["title", "heading", "lead"].map(t => ok.find(x => x.type === t)).find(Boolean) || ok[0];
+  return b ? b.zh.replace(/\s+/g, " ").trim() : "这一页没有文字";
+}
+function tapBox(n, id, el) {
+  if (S.selecting) return;
+  if (!sheetOn()) return activate(n, id, true);
+  if (S.tap === "bubble") return showBubble(n, id, el);
+  const raise = SHEET.lvl === 0;
+  if (raise) setSheet(1);
+  activate(n, id, false);
+  setTimeout(() => activate(n, id, true), raise ? 300 : 0);  // after the sheet has grown
+}
+function showBubble(n, id, el) {
+  closeBubble();
+  const b = S.data[n]?.blocks.find(x => x.id === id);
+  if (!b || trivial(b)) return;
+  activate(n, id, false);
+  const left = $("#left"), bub = document.createElement("div");
+  const hasJa = b.ja && squash(b.ja) !== squash(b.zh);
+  bub.id = "bubble";
+  bub.innerHTML = `<div class="bt"><span>P.${n + 1}</span><span class="grow"></span><button type="button" class="x" aria-label="关闭">✕</button></div>
+    <div class="zh"></div>${hasJa ? `<div class="ja" lang="ja" hidden></div><div class="more">点一下看原文</div>` : ""}
+    ${showNote(b.note) ? `<div class="note"></div>` : ""}`;
+  bub.querySelector(".zh").textContent = b.zh;
+  if (hasJa) bub.querySelector(".ja").textContent = b.ja;
+  if (bub.querySelector(".note")) bub.querySelector(".note").textContent = b.note;
+  left.appendChild(bub);
+  const r = el.getBoundingClientRect(), L = left.getBoundingClientRect();
+  const room = L.height - (parseFloat($("#reader").style.getPropertyValue("--peek")) || 64);
+  const below = r.bottom - L.top + 8, above = r.top - L.top - bub.offsetHeight - 8;
+  bub.style.top = (below + bub.offsetHeight <= room ? below : Math.max(8, above)) + "px";
+  bub.querySelector(".x").onclick = e => { e.stopPropagation(); closeBubble(); };
+  bub.onclick = () => {
+    if (!hasJa) return;
+    const ja = bub.querySelector(".ja"); ja.hidden = !ja.hidden;
+    bub.querySelector(".more").textContent = ja.hidden ? "点一下看原文" : "点一下收起原文";
+  };
+}
+function closeBubble() { const b = $("#bubble"); if (b) { b.remove(); activate(0, null); } }
+// tapping the page outside any passage closes the bubble
+$("#stage").addEventListener("click", e => { if (!e.target.closest(".bx")) closeBubble(); });
+
+// ---------------------------------------------------------------- feedback (readers -> admin)
+function feedbackForm(n) {
+  if (!ME.auth) return "";  // local no-account mode: nobody to send it to
+  return `<div class="fb" data-page="${n}"><button type="button" class="fb-open">这一页的翻译有问题？告诉我</button></div>`;
+}
+function bindFeedback() {
+  const box = $("#panel .fb"); if (!box) return;
+  box.querySelector(".fb-open").onclick = () => {
+    box.innerHTML = `<label for="fb-text">第 ${+box.dataset.page + 1} 页：哪里不对，或者有什么建议？</label>
+      <textarea id="fb-text" maxlength="1000" placeholder="比如：第二段的店名翻错了"></textarea>
+      <div class="fb-row"><span class="fb-msg" role="status"></span><span class="grow"></span>
+        <button type="button" class="fb-cancel">取消</button><button type="button" class="fb-send primary">发送</button></div>`;
+    const ta = box.querySelector("textarea"), msg = box.querySelector(".fb-msg");
+    ta.focus();
+    box.querySelector(".fb-cancel").onclick = () => { box.outerHTML = feedbackForm(+box.dataset.page); bindFeedback(); };
+    box.querySelector(".fb-send").onclick = async () => {
+      const text = ta.value.trim();
+      if (!text) { msg.textContent = "写点什么再发送"; msg.classList.add("err"); return ta.focus(); }
+      try {
+        await uapi("/api/feedback", "POST", { mag_id: S.mag.id, page: +box.dataset.page, text });
+        box.innerHTML = `<span>收到了，谢谢！</span>`;
+      } catch (err) { msg.textContent = err.message; msg.classList.add("err"); }
+    };
+  };
+}
+async function openFeedback() {
+  const t = $("#fb-table");
+  t.textContent = "加载中…"; $("#fbdlg").showModal();
+  let list;
+  try { list = (await uapi("/api/feedback")).feedback; } catch (e) { t.textContent = e.message; return; }
+  t.textContent = "";
+  if (!list.length) { t.innerHTML = `<div class="empty">还没有反馈。</div>`; return; }
+  for (const f of list) {  // reader text: textContent only, never innerHTML
+    const row = document.createElement("div"); row.className = "fbr";
+    const h = document.createElement("div"); h.className = "fbh";
+    const a = document.createElement("a");
+    a.href = `#/m/${encodeURIComponent(f.mag_id)}/${f.page + 1}`;
+    a.textContent = `${String(f.title || "").trim()} · 第 ${f.page + 1} 页`;
+    a.onclick = () => $("#fbdlg").close();
+    const who = document.createElement("span"); who.textContent = f.user;
+    const when = document.createElement("span"); when.textContent = new Date(f.time).toLocaleString();
+    h.append(a, who, when);
+    const txt = document.createElement("div"); txt.className = "fbt"; txt.textContent = f.text;
+    row.append(h, txt); t.appendChild(row);
+  }
 }
 
 // ---------------------------------------------------------------- region select
@@ -395,6 +558,7 @@ function syncToolButtons() {
   $("#btn-dir").textContent = S.rtl ? "右翻 ⇐" : "左翻 ⇒";
   $("#btn-boxes").classList.toggle("on", S.boxes);
   $("#btn-select").classList.toggle("on", S.selecting);
+  $("#btn-tap").classList.toggle("on", S.tap === "bubble");
 }
 function setSelecting(v) { S.selecting = v; $("#pages").classList.toggle("selecting", v); syncToolButtons(); }
 $("#mode").onclick = e => { if (e.target.dataset.mode) { S.mode = e.target.dataset.mode; store.set("mode", S.mode); syncToolButtons(); } };
@@ -402,13 +566,14 @@ $("#btn-spread").onclick = () => { S.spread = !S.spread; store.set("spread", S.s
 $("#btn-dir").onclick = () => { S.rtl = !S.rtl; store.set("rtl", S.rtl); render(); };
 $("#btn-boxes").onclick = () => { S.boxes = !S.boxes; render(); };
 $("#btn-select").onclick = () => setSelecting(!S.selecting);
+$("#btn-tap").onclick = () => { S.tap = S.tap === "bubble" ? "sheet" : "bubble"; store.set("tap", S.tap); closeBubble(); syncToolButtons(); };
 $("#btn-retry").onclick = () => visiblePages().forEach(retry);
 window.retry = async n => { await api(`/api/mag/${S.mag.id}/page/${n}/retranslate`, { method: "POST" }); loadPage(n); };
 $("#prev").onclick = () => go(S.rtl ? 1 : -1);
 $("#next").onclick = () => go(S.rtl ? -1 : 1);
 $("#pageinput").onchange = e => { location.hash = `#/m/${S.mag.id}/${clampPage(+e.target.value - 1) + 1}`; };
 document.addEventListener("keydown", e => {
-  if ($("#reader").hidden || e.target.tagName === "INPUT" || $("#gloss").open || $("#users").open) return;
+  if ($("#reader").hidden || ["INPUT", "TEXTAREA"].includes(e.target.tagName) || $("#gloss").open || $("#users").open || $("#fbdlg").open) return;
   if (e.key === "ArrowLeft") go(S.rtl ? 1 : -1);
   else if (e.key === "ArrowRight") go(S.rtl ? -1 : 1);
   else if (e.key === "s") $("#btn-spread").click();
